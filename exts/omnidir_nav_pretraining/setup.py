@@ -1,4 +1,4 @@
-"""Installation script for the 'ext_template' python package."""
+"""Installation script for the 'omnidir_nav_pretraining' python package."""
 
 import os
 import toml
@@ -18,8 +18,8 @@ INSTALL_REQUIRES = [
 
 # Installation operation
 setup(
-    name="ext_template",
-    packages=["ext_template"],
+    name="omnidir_nav_pretraining",
+    packages=["omnidir_nav_pretraining"],
     author=EXTENSION_TOML_DATA["package"]["author"],
     maintainer=EXTENSION_TOML_DATA["package"]["maintainer"],
     url=EXTENSION_TOML_DATA["package"]["repository"],
