@@ -1,3 +1,5 @@
+Note(kappi): conda install -c conda-forge libstdcxx-ng
+
 # Template for Isaac Lab Projects
 
 [![IsaacSim](https://img.shields.io/badge/IsaacSim-4.2.0-silver.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)
