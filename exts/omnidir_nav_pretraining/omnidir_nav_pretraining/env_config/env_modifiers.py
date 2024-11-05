@@ -1,38 +1,56 @@
-# env_modifier_pre_init, env_modifier_post_init
+from dataclasses import MISSING
+
+from omni.isaac.lab.utils import configclass
+from omni.isaac.lab.managers import ObservationGroupCfg as ObsGroup
+from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
+from omni.isaac.lab.managers import SceneEntityCfg
+
+import omnidir_nav.mdp as mdp
+
 
 def env_modifier_pre_init(cfg, args_cli):
     """Modify the environment config before initialization."""
-        # change terrain config
-    cfg.env_cfg.scene.terrain = TerrainImporterCfg(
-        prim_path="/World/ground",
-        terrain_type="usd",
-        max_init_terrain_level=None,
-        collision_group=-1,
-        physics_material=sim_utils.RigidBodyMaterialCfg(
-            friction_combine_mode="min",
-            restitution_combine_mode="min",
-            static_friction=1.0,
-            dynamic_friction=1.0,
-        ),
-        # visual_material=sim_utils.MdlFileCfg(
-        #     mdl_path=f"{NVIDIA_NUCLEUS_DIR}/Materials/Base/Architecture/Shingles_01.mdl",
-        #     project_uvw=True,
-        # ),
-        debug_vis=False,
-        usd_uniform_env_spacing=10.0,  # 10m spacing between environment origins in the usd environment
-    )
+    # change terrain config
+    if args_cli.test_env == "plane":
+        cfg.env_cfg.scene.terrain.terrain_type = "plane"
+
+    # TODO(kappi): Make goal command able to return the waypoints for an agent, as well as just the goal for observations.
     # restrict goal generator to be purely goal-generated without any planner
-    cfg.env_cfg.commands.command = mdp.ConsecutiveGoalCommandCfg(
-        resampling_time_range=(1000000.0, 1000000.0),  # only resample once at the beginning
-        terrain_analysis=TERRAIN_ANALYSIS_CFG,
-    )
-    if hasattr(cfg.env_cfg.observations, "planner_obs"):
-        cfg.env_cfg.observations.planner_obs.goal.func = mdp.goal_command_w_se2
-        cfg.env_cfg.observations.planner_obs.goal.params = {"command_name": "command"}
+    # cfg.env_cfg.commands.command = mdp.ConsecutiveGoalCommandCfg(
+    #     resampling_time_range=(1000000.0, 1000000.0),  # only resample once at the beginning
+    #     terrain_analysis=TERRAIN_ANALYSIS_CFG,
+    # )
+
+    # Add observation group for data specific to pretraining.
+    @configclass
+    class PretrainingCfg(ObsGroup):
+        """Observations for pretraining data group."""
+
+        base_position = ObsTerm(func=mdp.base_position)
+        base_orientation = ObsTerm(func=mdp.base_orientation_xyzw)
+        base_collision = ObsTerm(
+            func=mdp.base_collision,
+            params={
+                "sensor_cfg": SceneEntityCfg(
+                    "contact_forces", body_names=["base", "RF_THIGH", "LF_THIGH", "RH_THIGH", "LH_THIGH"]
+                ),
+                "threshold": 1.0,
+            },
+        )
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    cfg.env_cfg.observations.pretraining_state = PretrainingCfg()
+
+    cfg.env_cfg.scene.num_envs = args_cli.num_envs
+
+    # Turn off curriculum
     cfg.env_cfg.curriculum = MISSING
     return cfg
 
-def env_modifier_post_init(cfg, args_cli):
+
+def env_modifier_post_init(runner, args_cli):
     """Modify the environment config after initialization."""
-    cfg.env_cfg.scene.num_envs = args_cli.num_envs
-    return cfg
+    print(f"[INFO] Post-Init modifying Environment...")
+    return runner

@@ -4,7 +4,7 @@ Python module serving as a project/extension template.
 
 import os
 
-# Register Gym environments.
+from .data_buffers import *
 from .env_config import *
 from .runner import *
 
