@@ -47,13 +47,6 @@ class ReplayBuffer:
         return self._data_collection_interval
 
     @property
-    def history_collection_interval(self):
-        """The interval at which history is collected.
-
-        Defined as the number of steps (decimation x physics_dt) after which history is collected."""
-        return self._history_collection_interval
-
-    @property
     def env_buffer_filled(self):
         return self.fill_idx >= self.cfg.trajectory_length
 
@@ -68,8 +61,14 @@ class ReplayBuffer:
         return torch.mean(self.fill_idx / self.cfg.trajectory_length).item()
 
     @property
-    def state_dim(self) -> tuple[int, ...]:
-        return self.env.observation_manager.group_obs_dim["pretraining_state"]
+    def state_dim(self) -> int:
+        assert (
+            len(self.env.observation_manager.group_obs_dim["pretraining_state"]) == 1
+        ), f"Expected a flat pretraining observation tuple"
+        # Add the shape of any additional non-observation state data
+        obs_state_dim: int = self.env.observation_manager.group_obs_dim["pretraining_state"][0]  # type: ignore
+        non_obs_state_dim: int = self.cfg.non_obs_state_dim
+        return obs_state_dim + non_obs_state_dim
 
     @property
     def observation_dim(self) -> tuple[int, ...]:
@@ -99,11 +98,8 @@ class ReplayBuffer:
         # for terminate environments, reset the step counter
         self.env_step_counter[dones] = 0
 
-        # update local history buffers
-        self._update_local_history_buffers(states, observations, active_envs)
-
         # update full trajectory buffers
-        self._update_full_trajectory_buffers(actions, active_envs)
+        self._update_buffers(actions, states, observations, active_envs)
 
         # update step counter for all environments
         # NOTE: we only start the counting once all feet were in contact
@@ -120,10 +116,6 @@ class ReplayBuffer:
 
         # reset the fill index
         self.fill_idx[env_ids] = 0
-
-        # reset the local history buffers
-        self.local_state_history[env_ids] = 0
-        self.local_observation_history[env_ids] = 0
 
         # reset the full trajectory buffers
         self.states[env_ids] = 0
@@ -162,23 +154,11 @@ class ReplayBuffer:
         self._data_collection_interval = self.global_settings_cfg.command_timestep / self.env.step_dt
         if self._data_collection_interval % 1 != 0:
             print("[WARNING]: Data collection interval is not an integer. Can influence data collection.")
-        # define after how many steps (decimation x physics_dt) the state/ obs should be written in the buffer
-        self._history_collection_interval = self._data_collection_interval / self.cfg.history_length
-        assert self._history_collection_interval >= 1, (
-            "History collection frequency calculated as must be larger than "
-            "physics frequency! Decrease history length as collection timestep is calculated by division of the "
-            "command timestep by the history length"
-        )
-        if self._history_collection_interval % 1 != 0:
-            print(
-                "[WARNING]: History collection interval is not an integer. Will make data collection not equidistant,"
-                "i.e. with an interval of 2.5 will sample at env step [3, 5, 8, 10, 13, ...]."
-            )
 
         # full trajectory buffers
-        # state is position, orientation, collision
+        # state is position, orientation, collision, path to goal
         self.states = torch.zeros(
-            (self.env.num_envs, self.cfg.trajectory_length, self.cfg.history_length, *(self.state_dim)),
+            (self.env.num_envs, self.cfg.trajectory_length, self.state_dim),
             device=self.device,
         )
         # observations
@@ -186,7 +166,6 @@ class ReplayBuffer:
             (
                 self.env.num_envs,
                 self.cfg.trajectory_length,
-                self.cfg.history_length,
                 *(self.observation_dim),
             ),
             device=self.device,
@@ -197,41 +176,15 @@ class ReplayBuffer:
             device=self.device,
         )
 
-        # local history buffers
-        self.local_state_history = torch.zeros(
-            (self.env.num_envs, self.cfg.history_length, *(self.state_dim)), device=self.device
-        )
-        self.local_observation_history = torch.zeros(
-            (self.env.num_envs, self.cfg.history_length, *(self.observation_dim)),
-            device=self.device,
-        )
-
         # index buffers
         self.fill_idx = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.long)
         self.env_step_counter = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.long)
 
-    def _update_local_history_buffers(
-        self,
-        state: torch.Tensor,
-        observations: torch.Tensor,
-        active_envs: torch.Tensor,
-    ):
-        # local robot state history buffer
-        updatable_envs = (self.env_step_counter % self._history_collection_interval).type(torch.int) == 0  # noqa: E721
-        # don't update if robot has not touched the ground yet (initial falling period after reset)
-        updatable_envs[~active_envs] = False
-        # write the current robot state into the buffer
-        self.local_state_history[updatable_envs] = torch.roll(self.local_state_history[updatable_envs], 1, dims=1)
-        self.local_state_history[updatable_envs, 0] = state[updatable_envs].to(self.device)
-        # write the current observation into the buffer
-        self.local_observation_history[updatable_envs] = torch.roll(
-            self.local_observation_history[updatable_envs], 1, dims=1
-        )
-        self.local_observation_history[updatable_envs, 0] = observations[updatable_envs].to(self.device)
-
-    def _update_full_trajectory_buffers(
+    def _update_buffers(
         self,
         actions: torch.Tensor,
+        states: torch.Tensor,
+        observations: torch.Tensor,
         active_envs: torch.Tensor,
     ):
         # for updatable environments, store the state, observations and action
@@ -250,12 +203,10 @@ class ReplayBuffer:
         if len(updatable_idxs) == 0:
             return
 
-        # write state with history into buffer
-        self.states[updatable_idxs, self.fill_idx[updatable_idxs]] = self.local_state_history[updatable_idxs].clone()
-        # write observations with history into buffer
-        self.observations[updatable_idxs, self.fill_idx[updatable_idxs]] = self.local_observation_history[
-            updatable_idxs
-        ].clone()
+        # write state into buffer
+        self.states[updatable_idxs, self.fill_idx[updatable_idxs]] = states[updatable_idxs].to(self.device)
+        # write observations into buffer
+        self.observations[updatable_idxs, self.fill_idx[updatable_idxs]] = observations[updatable_idxs].to(self.device)
         # write actions into buffer
         self.actions[updatable_idxs, self.fill_idx[updatable_idxs]] = actions[updatable_idxs].to(self.device)
 

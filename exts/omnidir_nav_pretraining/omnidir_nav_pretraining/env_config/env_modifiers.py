@@ -1,5 +1,7 @@
 from dataclasses import MISSING
 
+from omni.isaac.lab.envs import ViewerCfg
+from nav_collectors.terrain_analysis.terrain_analysis_cfg import TerrainAnalysisCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.managers import ObservationGroupCfg as ObsGroup
 from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
@@ -14,18 +16,12 @@ def env_modifier_pre_init(cfg, args_cli):
     if args_cli.test_env == "plane":
         cfg.env_cfg.scene.terrain.terrain_type = "plane"
 
-    # TODO(kappi): Make goal command able to return the waypoints for an agent, as well as just the goal for observations.
-    # restrict goal generator to be purely goal-generated without any planner
-    # cfg.env_cfg.commands.command = mdp.ConsecutiveGoalCommandCfg(
-    #     resampling_time_range=(1000000.0, 1000000.0),  # only resample once at the beginning
-    #     terrain_analysis=TERRAIN_ANALYSIS_CFG,
-    # )
+    cfg.env_cfg.commands.goal_command = cfg.pretraining_goal_command_cfg
 
     # Add observation group for data specific to pretraining.
     @configclass
     class PretrainingCfg(ObsGroup):
         """Observations for pretraining data group."""
-
         base_position = ObsTerm(func=mdp.base_position)
         base_orientation = ObsTerm(func=mdp.base_orientation_xyzw)
         base_collision = ObsTerm(
@@ -37,11 +33,25 @@ def env_modifier_pre_init(cfg, args_cli):
                 "threshold": 1.0,
             },
         )
+        goal_paths = ObsTerm(func=mdp.full_path_to_goal_robot_frame)
 
         def __post_init__(self):
             self.concatenate_terms = True
 
     cfg.env_cfg.observations.pretraining_state = PretrainingCfg()
+
+    @configclass
+    class DebugViewerCfg(ViewerCfg):
+        """Configuration of the scene viewport camera."""
+
+        eye: tuple[float, float, float] = (0.0, 7.0, 7.0)
+        lookat: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        resolution: tuple[int, int] = (1280, 720)  # (1280, 720) HD, (1920, 1080) FHD
+        origin_type: str = "asset_root"  # "world", "env", "asset_root"
+        env_index: int = 1
+        asset_name: str = "robot"
+
+    cfg.env_cfg.viewer = DebugViewerCfg()
 
     cfg.env_cfg.scene.num_envs = args_cli.num_envs
 

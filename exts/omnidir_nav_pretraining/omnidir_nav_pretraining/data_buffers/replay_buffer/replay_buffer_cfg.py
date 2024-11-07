@@ -9,9 +9,6 @@ from omni.isaac.lab.utils import configclass
 
 @configclass
 class ReplayBufferCfg:
-    # TODO(kappi): move to global config
-    history_length: int = 1
-
     # replay buffer
     trajectory_length: int = 20
     """How many commands steps are stored for each environment."""
@@ -21,3 +18,5 @@ class ReplayBufferCfg:
     Note: leave at `cpu` for high-dimensional exteroceptive observations. Otherwise, use `cuda`.
     `cpu` can lead to reduced performance.
     """
+    non_obs_state_dim: int = 0
+    """The dimension of any additional non-observation state data that is added during data collection."""

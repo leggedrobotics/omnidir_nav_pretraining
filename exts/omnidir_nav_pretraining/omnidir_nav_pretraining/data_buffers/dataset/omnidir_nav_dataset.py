@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     from omnidir_nav_pretraining.data_buffers.replay_buffer import ReplayBuffer, ReplayBufferCfg
     from omnidir_nav_pretraining.runner.runner_cfg import GlobalSettingsCfg
 
+# Start and end indices for the goal waypoints in the observation tensor.
+GOAL_IDX_START = 30
+GOAL_IDX_END = GOAL_IDX_START + 3
 
 class OmnidirNavDataset(Dataset):
     def __init__(
@@ -57,6 +60,7 @@ class OmnidirNavDataset(Dataset):
     def populate(
         self,
         replay_buffer: ReplayBuffer,
+        num_waypoints: int,
     ):
         """
         Update data in the buffer for specified indexes.
@@ -65,37 +69,53 @@ class OmnidirNavDataset(Dataset):
             replay_buffer: The replay buffer to get the data from.
         """
         start_idx = self._sample_random_traj_idx(replay_buffer)
-        # TODO(kappi): Select goal idxs
 
         ############################################################
         # Actions
         ############################################################
-        self.actions = replay_buffer.actions[start_idx[:, 0], start_idx[:, 1]] 
+        self.actions = replay_buffer.actions[start_idx[:, 0], start_idx[:, 1]]
 
         ############################################################
         # States
         ############################################################
 
-        # TODO(kappi): get current state and use it to transform the previous and following states into the local robot 
+        # TODO(kappi): get current state and use it to transform the previous and following states into the local robot
         # frame shape: [N, 7] with [x, y, z, qx, qy, qz, qw]
-        initial_states = replay_buffer.states[start_idx[:, 0], start_idx[:, 1], 0][
-            :, None, :7
-        ]
-      
+        self.states = replay_buffer.states[start_idx[:, 0], start_idx[:, 1]]
+
         ############################################################
         # Observations
         ############################################################
 
-        self.obs = replay_buffer.observations[
-            start_idx[:, 0], start_idx[:, 1]
-        ]
+        self.obs = replay_buffer.observations[start_idx[:, 0], start_idx[:, 1]]
 
         ############################################################
         # Goals
         ############################################################
 
-        #TODO(kappi): Implement goal extraction
+        # The last entry in the state is the current waypoint index
+        curr_waypoint_idx = replay_buffer.states[start_idx[:, 0], start_idx[:, 1], -1].to(torch.int)
+        # Extract the whole path of waypoints
+        paths = replay_buffer.states[start_idx[:, 0], start_idx[:, 1], -num_waypoints * 3 -1 :-1]
+        paths = paths.view(paths.shape[0], num_waypoints, 3)
 
+        # All waypoints can act as goals, except those from the past (before the current waypoint)
+        # So for waypoints in the past, overwrite them with the last (goal) waypoint
+        # Get the shape parameters
+        num_envs, num_waypoints, _ = paths.shape
+
+        # Calculate the range limits for each environment
+        # num_waypoints - waypoint_idx gives the range size for each environment
+        range_size = num_waypoints - curr_waypoint_idx
+
+        # Generate a random offset within each environment's range size
+        random_offsets = self._tensor_randint(0, range_size, (num_envs,)).to(torch.int)
+
+        # Add the random offsets to waypoint_idx to get a random waypoint in the specified range
+        random_valid_goals = paths[torch.arange(paths.shape[0]), curr_waypoint_idx + random_offsets]
+
+        # Overwrite the observed goals with the random valid goals
+        self.obs[:, GOAL_IDX_START:GOAL_IDX_END] = random_valid_goals
 
         ############################################################
         # Filter data
@@ -103,7 +123,7 @@ class OmnidirNavDataset(Dataset):
 
         # init keep index array
         keep_idx = torch.ones(
-            self.state_history.shape[0],
+            self.obs.shape[0],
             dtype=torch.bool,
             device=self.replay_buffer_cfg.buffer_device,
         )
@@ -118,14 +138,11 @@ class OmnidirNavDataset(Dataset):
 
         # TODO(kappi): Possibly normalize data based on the statistics
 
-        max_distance = torch.norm(self.states[:, -1, :2], dim=1)
-
         # get the maximum observed velocity
         lin_velocity = torch.abs(
-            (self.states[:, 1:, :2] - self.states[:, :-1, :2])
-            / self.global_settings_cfg.command_timestep
+            (replay_buffer.states[:, 1:, :2] - replay_buffer.states[:, :-1, :2]) / self.global_settings_cfg.command_timestep
         )
-        heading = torch.atan2(self.states[:, :, 2], self.states[:, :, 3])
+        heading = torch.atan2(replay_buffer.states[:, :, 2], replay_buffer.states[:, :, 3])
         # enforce periodicity of the heading
         yaw_diff = torch.abs(heading[:, 1:] - heading[:, :-1])
         yaw_diff = math_utils.wrap_to_pi(yaw_diff)
@@ -140,25 +157,20 @@ class OmnidirNavDataset(Dataset):
 
         # get the maximum observed acceleration
         max_lin_acceleration = torch.max(
-            torch.abs(
-                (lin_velocity[:, 1:] - lin_velocity[:, :-1])
-                / self.global_settings_cfg.command_timestep
-            ).reshape(-1, 2),
+            torch.abs((lin_velocity[:, 1:] - lin_velocity[:, :-1]) / self.global_settings_cfg.command_timestep).reshape(
+                -1, 2
+            ),
             dim=0,
         )[0]
         max_ang_acceleration = torch.max(
-            torch.abs(
-                (ang_velocity[:, 1:] - ang_velocity[:, :-1])
-                / self.global_settings_cfg.command_timestep
-            ).reshape(-1, 1),
+            torch.abs((ang_velocity[:, 1:] - ang_velocity[:, :-1]) / self.global_settings_cfg.command_timestep).reshape(
+                -1, 1
+            ),
             dim=0,
         )[0]
-        max_acceleration = torch.concatenate(
-            [max_lin_acceleration, max_ang_acceleration], dim=0
-        )
+        max_acceleration = torch.concatenate([max_lin_acceleration, max_ang_acceleration], dim=0)
 
         # TODO(kappi): Check the maximum velocity is not more than the maximum commanded velocity, filter out the samples
-
 
         ############################################################
         # Check for nan and inf values
@@ -166,13 +178,7 @@ class OmnidirNavDataset(Dataset):
 
         if torch.any(torch.isnan(self.states)) or torch.any(torch.isinf(self.states)):
             raise ValueError("Nan/ Inf values in states!")
-        if torch.any(torch.isnan(self.state_history)) or torch.any(
-            torch.isinf(self.state_history)
-        ):
-            raise ValueError("Nan/ Inf values in state history!")
-        if torch.any(torch.isnan(self.obs)) or torch.any(
-            torch.isinf(self.obs)
-        ):
+        if torch.any(torch.isnan(self.obs)) or torch.any(torch.isinf(self.obs)):
             raise ValueError("Nan/ Inf values in proprioceptive observations!")
         if torch.any(torch.isnan(self.actions)) or torch.any(torch.isinf(self.actions)):
             raise ValueError("Nan/ Inf values in actions!")
@@ -180,14 +186,21 @@ class OmnidirNavDataset(Dataset):
         ############################################################
         # Print meta information
         ############################################################
-        self._print_statistics(max_distance, max_velocity, max_acceleration)
-        
+        self._print_statistics(max_velocity, max_acceleration)
 
     """
     Private functions
     """
 
-    def _print_statistics(self, max_distance: torch.Tensor, max_velocity: torch.Tensor, max_acceleration: torch.Tensor):
+    def _tensor_randint(self, low: int | torch.Tensor, high: torch.Tensor | None =None, size=None):
+        if high is None:
+            high = low
+            low = 0
+        if size is None:
+            size = low.shape if isinstance(low, torch.Tensor) else high.shape
+        return torch.randint(2**63 - 1, size=size) % (high - low) + low
+
+    def _print_statistics(self, max_velocity: torch.Tensor, max_acceleration: torch.Tensor):
         """Print statistics of the dataset"""
         table = PrettyTable()
         table.field_names = ["Metric", "Value"]
@@ -195,48 +208,17 @@ class OmnidirNavDataset(Dataset):
         table.align["Value"] = "r"
 
         # Add rows with formatted values
-        table.add_row(
-            (
-                "Average max distance",
-                f"{torch.mean(torch.abs(max_distance), dim=0).item():.4f}",
-            )
-        )
-        table.add_row(
-            ("Max velocity", [f"{v:.4f}" for v in max_velocity.cpu().tolist()])
-        )
-        table.add_row(
-            ("Max acceleration", [f"{a:.4f}" for a in max_acceleration.cpu().tolist()])
-        )
-
-        # Print distance percentages
-        for distance in range(1, int(torch.max(max_distance).item()) + 1):
-            ratio = (
-                torch.sum(
-                    torch.all(
-                        torch.vstack(
-                            (max_distance - 1 < distance, max_distance > distance)
-                        ),
-                        dim=0,
-                    )
-                )
-                / self.states.shape[0]
-            )
-            table.add_row(
-                (f"Ratio between {distance-1} - {distance}m", f"{ratio.item():.4f}")
-            )
+        table.add_row(("Max velocity", [f"{v:.4f}" for v in max_velocity.cpu().tolist()]))
+        table.add_row(("Max acceleration", [f"{a:.4f}" for a in max_acceleration.cpu().tolist()]))
 
         # Print table
         print(f"[INFO] Dataset Metrics {self.states.shape[0]} samples\n", table)
 
-
     def _sample_random_traj_idx(self, replay_buffer: ReplayBuffer):
         # sample random start indexes
-        # collision not correctly captured at the last entry of the trajectory, exclude it from trajectories
         start_idx = torch.randint(
             1,
-            self.replay_buffer_cfg.trajectory_length
-            - self.cfg.min_traj_duration_steps
-            - 1,
+            self.replay_buffer_cfg.trajectory_length - self.cfg.min_traj_duration_steps - 1,
             (self.cfg.num_samples,),
             device=self.replay_buffer_cfg.buffer_device,
         )
@@ -248,18 +230,15 @@ class OmnidirNavDataset(Dataset):
         )
         return torch.vstack([env_idx, start_idx]).T
 
-
     def _filter_idx(self, keep_idx: torch.Tensor):
         """Filter data and only keep the given indexes. After filtering, update the number of samples"""
         # filter data
-        self.state_history = self.state_history[keep_idx]
         self.obs = self.obs[keep_idx]
         self.actions = self.actions[keep_idx]
         self.states = self.states[keep_idx]
 
         # update sample number
         self._actual_num_samples = torch.sum(keep_idx).item()
-
 
     """
     Properties called when accessing the data
@@ -272,10 +251,6 @@ class OmnidirNavDataset(Dataset):
         # TODO(kappi): Implement correct model inputs
         return (
             # model inputs
-            self.state_history[index],
             self.obs[index],
             self.actions[index],
-            # model targets
-            self.states[index],
-            # eval data
         )

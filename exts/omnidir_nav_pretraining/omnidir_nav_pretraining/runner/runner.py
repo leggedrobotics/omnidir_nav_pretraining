@@ -15,7 +15,7 @@ from omni.isaac.lab.envs import ManagerBasedRLEnv
 
 from omnidir_nav_pretraining.data_buffers.dataset import OmnidirNavDataset
 from omnidir_nav_pretraining.data_buffers.replay_buffer import ReplayBuffer
-# from omnidir_nav_pretraining.agent import PDAgent
+from omnidir_nav_pretraining.agent import PDAgent
 
 from .runner_cfg import OmnidirNavRunnerCfg
 
@@ -62,7 +62,7 @@ class OmnidirNavRunner:
         )
         # setup replay buffer
         self.replay_buffer = ReplayBuffer(self.cfg.replay_buffer_cfg, self.cfg.global_settings_cfg, self.env)
-        # self.agent: PDAgent = self.cfg.agent_cfg.class_type(self.cfg.agent_cfg, self.global_settings_cfg, self)
+        self.agent: PDAgent = self.cfg.agent_cfg.class_type(self.cfg.agent_cfg, self.env)
 
         # TODO(kappi): setup model and trainer
 
@@ -94,10 +94,12 @@ class OmnidirNavRunner:
             obs, _ = self.env.reset(random.randint(0, 1000000))
             # the contact sensor is delayed, execute delay+1 steps to reset all environments correctly
             if torch.any(obs[PRETRAINING_OBS][..., CONTACT_OBSERVATION_IDX]): # type: ignore
-                for _ in range(self.cfg.env_cfg.scene.contact_forces.history_length - self.cfg.env_cfg.decimation + 1):
+                for _ in range(self.cfg.env_cfg.scene.contact_forces.history_length + 1):
                     obs, _, dones, _, _ = self.env.step(torch.zeros(self.env.num_envs, 3, device=self.env.device))
                 if dones.sum() != 0:
                     carb.log_warn("Environments should not be done after reset.")
+                if torch.any(obs[PRETRAINING_OBS][..., CONTACT_OBSERVATION_IDX]):
+                    carb.log_error("Environments should not have contact after reset.")
 
         # reset replay buffer
         self.replay_buffer.reset()
@@ -117,6 +119,8 @@ class OmnidirNavRunner:
         collect_time = []
         info_counter = 1
         step_counter = 0
+
+        num_waypoints = self.env.command_manager.get_term("goal_command").full_paths.shape[1] # type: ignore
 
         while not self.replay_buffer.is_filled:
             ############################################################
@@ -147,19 +151,23 @@ class OmnidirNavRunner:
             plan_start = time.time()
 
             # get actions
-            #actions = self.agent.act(obs, dones.to(torch.bool).clone(), feet_contact=feet_all_contact)
-            # TODO(kappi): implement act method in the agent
-            actions = torch.zeros(self.env.num_envs, 3, device=self.env.device)
-            actions[:,0] = 1.0
+            paths = obs[PRETRAINING_OBS][:, -num_waypoints * 3 :].clone() # type: ignore
+            paths = paths.view(paths.shape[0], num_waypoints, 3)
+            actions, current_waypoint_idxs = self.agent.act(paths)
+            # Don't move if all the feet haven't touched the ground yet
+            actions[~feet_all_contact] = torch.zeros(1, 3, device=self.device)
 
             plan_time += time.time() - plan_start
 
             ############################################################
             # Update replay buffer
             ###############################################################
+
+            # Add the current waypoint indexes to the state
+            states = torch.cat((obs[PRETRAINING_OBS].clone(), current_waypoint_idxs.unsqueeze(1)), dim=-1) # type: ignore
             update_buffer_start = time.time()
             self.replay_buffer.add(
-                states=obs[PRETRAINING_OBS].clone(),
+                states=states,
                 observations=obs[NAVIGATION_OBS].clone(),
                 actions=actions.clone(),
                 dones=dones.to(torch.bool).clone(),
@@ -207,10 +215,10 @@ class OmnidirNavRunner:
         ############################################################
         print(f"[INFO]: Sampling from Replay Buffer to populate {'eval' if eval else 'training'} dataset.")
         if eval:
-            self.validation_dataset.populate(replay_buffer=self.replay_buffer)
+            self.validation_dataset.populate(replay_buffer=self.replay_buffer, num_waypoints=num_waypoints)
 
         else:
-            self.train_dataset.populate(replay_buffer=self.replay_buffer)
+            self.train_dataset.populate(replay_buffer=self.replay_buffer, num_waypoints=num_waypoints)
 
         print("[INFO]: Data collection complete.")
 

@@ -69,6 +69,8 @@ def main():
     with open(dataset_path + ".pkl", "wb") as fp:
         pickle.dump(runner.validation_dataset, fp)
     print(f"[INFO] Data saved to {dataset_path}.pkl")
+    # Print the size of the save file
+    print(f"[INFO] Size of the saved file: {os.path.getsize(dataset_path + '.pkl') / 1e6} MB")
 
 if __name__ == "__main__":
     main()

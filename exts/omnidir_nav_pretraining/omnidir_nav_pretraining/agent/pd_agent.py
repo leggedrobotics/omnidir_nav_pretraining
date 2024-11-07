@@ -1,134 +1,261 @@
+# Copyright (c) 2023-2024, ETH Zurich (Robotics Systems Lab)
+# Author: Pascal Sutter and Pascal Roth
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES, ETH Zurich, and University of Toronto
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
-import torch
-from abc import ABC, abstractmethod
+"""Sub-module containing command generators for the velocity-based locomotion task."""
+
+import math
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from fdm.runner import FDMRunner
+from abc import ABC, abstractmethod
 
-    from .base_agent_cfg import AgentCfg
+import omni.isaac.lab.utils.math as math_utils
+from omni.isaac.lab.markers.config import CUBOID_MARKER_CFG
+import torch
+from omni.isaac.lab.assets.articulation import Articulation
+from omni.isaac.lab.markers import VisualizationMarkers
+from omni.isaac.lab.markers.config import (
+    BLUE_ARROW_X_MARKER_CFG,
+    GREEN_ARROW_X_MARKER_CFG,
+)
+from omni.isaac.lab.sim import SimulationContext
+from omni.isaac.lab.utils.math import quat_from_euler_xyz
+
+if TYPE_CHECKING:
+    from .pd_agent_cfg import PDAgentCfg
+    from omni.isaac.lab.envs import ManagerBasedRLEnv
 
 
 class PDAgent(ABC):
-    def __init__(self, cfg: AgentCfg, runner: FDMRunner):
-        self.cfg: AgentCfg = cfg
-        self._runner: FDMRunner = runner
+    """Agent that generates a velocity command in SE(2) from a path given by a local planner.
 
-        # init buffers
-        self._init_buffers()
+    The command comprises of a linear velocity in x and y direction and an angular velocity around
+    the z-axis. It is given in the robot's base frame.
 
-    """
-    Properties
+    The path follower acts as a PD-controller that checks for the last point on the path within a lookahead distance
+    and uses it to compute the steering angle and the linear velocity.
     """
 
-    @property
-    def device(self):
-        return self._runner.env.device
+    cfg: PDAgentCfg
+    """The configuration of the command generator."""
 
-    @property
-    def action_dim(self):
-        return self._runner.env.action_manager.action.shape[1]
-
-    @property
-    def resample_interval(self):
-        return self._runner.cfg.model_cfg.command_timestep / self._runner.env.step_dt
-
-    """
-    Operations
-    """
-
-    def act(self, obs: dict, dones: torch.Tensor, feet_contact: torch.Tensor):
-        """Get the next actions for all environments.
+    def __init__(self, cfg: PDAgentCfg, env: ManagerBasedRLEnv):
+        """Initialize the command generator.
 
         Args:
-            obs: The current observation.
-            dones: The done flags for all environments. Specifies the terminated environments for which the
-                next command has to be resampled before the official resampling period.
-
-        Returns:
-            The next action for all environments. For all non-resampled environments, this will be the
-                same as the previous action.
+            cfg (PDAgentCfg): The configuration of the command generator.
+            env (BaseEnv): The environment.
         """
-        # for colliding environments, reset the action that is applied in the next step call and that will be recorded
-        # for the current state
-        # the action is applied to the step that resets the environment and to further steps until the next recording
-        # after the collision
-        colliding_envs = obs["fdm_state"][..., 7].to(torch.bool)
-        if torch.any(colliding_envs):
-            self.reset(obs=obs, env_ids=self._ALL_INDICES[colliding_envs], return_actions=False)
+        self.cfg = cfg
+        self.num_envs = env.num_envs
+        self.device = env.device
+        # -- robot
+        self.robot: Articulation = env.scene[cfg.robot_attr]
+        # -- Simulation Context
+        self.sim: SimulationContext = SimulationContext.instance()
+        # -- buffers
+        self.vehicleSpeed: torch.Tensor = torch.zeros(self.num_envs, device=self.device)
+        self.switch_time: torch.Tensor = torch.zeros(self.num_envs, device=self.device)
+        self.vehicleYawRate: torch.Tensor = torch.zeros(self.num_envs, device=self.device)
+        self.navigation_forward: torch.Tensor = torch.ones(self.num_envs, device=self.device, dtype=torch.bool)
+        self.twist: torch.Tensor = torch.zeros((self.num_envs, 3), device=self.device)
+        self.goal_reached: torch.Tensor = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.current_waypoint_idxs = torch.zeros((self.num_envs), device=self.device, dtype=torch.int)
 
-        # reset env counter when env is reset in simulation
-        self.env_step_counter[dones] = 0
+        self.prev_paths = None
 
-        # determine which environments should be updated depending on the sim time
-        # NOTE: filter all environments on the first step
-        # NOTE: filter all environments where not all feet have touched the ground yet
-        updatable_envs = self.env_step_counter % self.resample_interval == 0
-        updatable_envs[self.env_step_counter == 0] = False
-        updatable_envs[~feet_contact] = False
-        updatable_envs[self.env_step_counter == self.resample_interval] = ~colliding_envs[
-            self.env_step_counter == self.resample_interval
-        ]
-        # for environments that should be resampled, increase the counter
-        self._plan_step[updatable_envs] += 1
+        # -- debug vis
+        self._set_debug_vis(cfg.debug_vis)
 
-        # agents (e.g. sampling planner agent) can depend on the reset state of the environment, which is available
-        # after the sim reset, i.e., when dones is True. Therefore, this agent should perform another reset before
-        # the first time their _plan_step gets increased.
-        # for these cases, the initial action given from the agent should be random and all further actions can be
-        # more targeted
-        planner_reset_after = updatable_envs & (self._plan_step == 1)
-        if torch.any(planner_reset_after):
-            self.plan_reset(obs=obs, env_ids=self._ALL_INDICES[planner_reset_after])
+    """
+    Operations.
+    """
 
-        # ensure to replan the environments out of a plan with their last step as new init
-        env_to_replan = self._ALL_INDICES[self._plan_step >= (self.cfg.horizon - 1)]
-        self.plan(env_ids=env_to_replan, obs=obs, random_init=False)
-        self._plan_step[env_to_replan] = 0
+    def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        """Reset the command generator.
 
-        # in expectation of the next env step, increase the counter
-        # NOTE: we only start the counting once all feet were in contact
-        self.env_step_counter[feet_contact] += 1
+        This function resets the command generator. It should be called whenever the environment is reset.
 
-        return self._plan[self._ALL_INDICES, self._plan_step]
-
-    def reset(
-        self, obs: dict | None = None, env_ids: torch.Tensor | None = None, return_actions: bool = True
-    ) -> torch.Tensor | None:
-        # handle case for all envs
+        Args:
+            env_ids (Optional[Sequence[int]], optional): The list of environment IDs to reset. Defaults to None.
+        """
+        # resolve the environment IDs
         if env_ids is None:
-            env_ids = self._ALL_INDICES
-        # reset buffers
-        self._plan_step[env_ids] = 0
-        self._plan[env_ids] = 0
-        # plan
-        self.plan(env_ids=env_ids, obs=obs, random_init=True)
-        if return_actions:
-            return self._plan[self._ALL_INDICES, self._plan_step]
+            env_ids = slice(None)
+        # reset the buffers
+        self.vehicleSpeed[env_ids] = 0.0
+        self.switch_time[env_ids] = 0.0
+        self.vehicleYawRate[env_ids] = 0.0
+        self.navigation_forward[env_ids] = True
+        self.twist[env_ids] = 0.0
+        self.goal_reached[env_ids] = False
 
-    @abstractmethod
-    def plan(self, obs: dict | None = None, env_ids: torch.Tensor | None = None, random_init: bool = True):
-        pass
+        self.current_waypoint_idxs = torch.zeros((self.num_envs), device=self.device)
+        return {}
 
-    def plan_reset(self, obs: dict, env_ids: torch.Tensor):
-        """Replan for already reset environments in the simulator.
+    def act(self, paths: torch.Tensor):
+        """Compute the velocity command.
 
-        Necessary for the sampling-planner agent that depends on the new observations from the reset environment."""
-        pass
+        Paths as a tensor of shape (num_envs, N, 3) where N is number of poses on the path. Num_envs is equal to
+        the number of robots spawned in all environments.
 
-    def debug_viz(self, env_ids: list[int] | None = None):
-        pass
+        returns:
+            torch.Tensor: The velocity command to be executed by the robot. Shape is (num_envs, 3).
+        """
+        # get number of pases of the paths
+        num_envs, N, _ = paths.shape
+        assert N > 0, "PDAgentGenerator: paths must have at least one poses."
+        # define current maxSpeed for the velocities
+        max_speed = torch.ones(num_envs, device=self.device) * self.cfg.maxSpeed
 
-    """
-    Helper functions
-    """
+        # transform path in base/ robot frame if given in world frame
+        paths_world = paths
+        if self.cfg.path_frame == "world":
+            paths = math_utils.quat_apply(
+                math_utils.quat_inv(self.robot.data.root_quat_w[:, None, :].repeat(1, N, 1)),
+                paths - self.robot.data.root_pos_w[:, None, :],
+            )
+        elif self.cfg.path_frame == "robot":
+            paths_world = math_utils.quat_apply(
+                self.robot.data.root_quat_w[:, None, :].repeat(1, N, 1), paths
+            ) + self.robot.data.root_pos_w[:, None, :]
 
-    def _init_buffers(self):
-        self._ALL_INDICES = torch.arange(self._runner.env.num_envs, device=self.device, dtype=torch.long)
-        # plan buffers
-        self._plan_step = torch.zeros(self._runner.env.num_envs, device=self.device, dtype=torch.long)
-        self._plan = torch.zeros((self._runner.env.num_envs, self.cfg.horizon, self.action_dim), device=self.device)
-        # env step counter
-        self.env_step_counter = torch.zeros(self._runner.env.num_envs, device=self.device, dtype=torch.long)
+        if self.prev_paths is not None:
+            tolerance = 0.5  # 50 cm
+            # Compare paths_world and self.prev_paths within the tolerance
+            new_paths = torch.any(torch.any(torch.abs(paths_world - self.prev_paths) > tolerance, dim=2), dim=1)
+            self.current_waypoint_idxs[new_paths] = 0
+        self.prev_paths = paths_world
+
+        # get distance that robot has to travel until last set waypoint
+        distance_end_point = torch.linalg.norm(paths[:, -1, :2], axis=1)
+
+        # Get the current waypoint for each agent
+        cur_waypoints = paths[torch.arange(num_envs), self.current_waypoint_idxs]
+        cur_waypoints_world = paths_world[torch.arange(num_envs), self.current_waypoint_idxs]
+
+        path_direction = torch.atan2(cur_waypoints[:, 1], cur_waypoints[:, 0])
+        direction_diff = -path_direction
+
+        # decide whether to drive forward or backward
+        if self.cfg.two_way_drive:
+            switch_time_threshold_exceeded = self.sim.current_time - self.switch_time > self.cfg.switch_time_threshold
+            # get index of robots that should switch direction
+            switch_to_backward_idx = torch.all(
+                torch.vstack(
+                    (abs(direction_diff) > math.pi / 2, switch_time_threshold_exceeded, self.navigation_forward)
+                ),
+                dim=0,
+            )
+            switch_to_forward_idx = torch.all(
+                torch.vstack(
+                    (abs(direction_diff) < math.pi / 2, switch_time_threshold_exceeded, ~self.navigation_forward)
+                ),
+                dim=0,
+            )
+            # update buffers
+            self.navigation_forward[switch_to_backward_idx] = False
+            self.navigation_forward[switch_to_forward_idx] = True
+            self.switch_time[switch_to_backward_idx] = self.sim.current_time
+            self.switch_time[switch_to_forward_idx] = self.sim.current_time
+
+        # adapt direction difference and maxSpeed depending on driving direction
+        direction_diff[~self.navigation_forward] += math.pi
+        limit_radians = torch.all(torch.vstack((direction_diff > math.pi, ~self.navigation_forward)), dim=0)
+        direction_diff[limit_radians] -= 2 * math.pi
+        max_speed[~self.navigation_forward] *= -1
+
+        # determine yaw rate of robot
+        vehicleYawRate = torch.zeros(num_envs, device=self.device)
+        stop_yaw_rate_bool = abs(direction_diff) < 2.0 * self.cfg.maxAccel * self.cfg.dt
+        vehicleYawRate[stop_yaw_rate_bool] = -self.cfg.stopYawRateGain * direction_diff[stop_yaw_rate_bool]
+        vehicleYawRate[~stop_yaw_rate_bool] = -self.cfg.yawRateGain * direction_diff[~stop_yaw_rate_bool]
+
+        # limit yaw rate of robot
+        vehicleYawRate[vehicleYawRate > self.cfg.maxYawRate] = self.cfg.maxYawRate
+        vehicleYawRate[vehicleYawRate < -self.cfg.maxYawRate] = -self.cfg.maxYawRate
+
+        # catch special cases
+        if not self.cfg.autonomyMode:
+            vehicleYawRate[max_speed == 0.0] = self.cfg.maxYawRate * self.cfg.joyYaw
+        if N <= 1:
+            vehicleYawRate *= 0
+            max_speed *= 0
+        elif self.cfg.noRotAtGoal:
+            vehicleYawRate[distance_end_point < self.cfg.stopDisThre] = 0.0
+
+        # determine joyspeed at the end of the path
+        slow_down_bool = distance_end_point / self.cfg.slowDwnDisThre < max_speed
+        max_speed[slow_down_bool] *= distance_end_point[slow_down_bool] / self.cfg.slowDwnDisThre
+
+        # update current waypoint
+        distance_cur_waypoint = torch.linalg.norm(cur_waypoints[:, :2], axis=1)
+        update_waypoint = distance_cur_waypoint < self.cfg.waypointUpdateThre
+        update_waypoint = update_waypoint & (self.current_waypoint_idxs < paths.shape[1] - 1)
+        self.current_waypoint_idxs[update_waypoint] += 1
+        self._debug_vis_callback(self, cur_waypoints_world + torch.Tensor([0, 0, 0.3]).to(cur_waypoints.device))
+
+        # update vehicle speed
+        drive_at_max_speed = torch.all(
+            torch.vstack(
+                (abs(direction_diff) < self.cfg.dirDiffThre, distance_cur_waypoint > self.cfg.curWaypointSlowDisThre)
+            ),
+            dim=0,
+        )
+        increase_speed = torch.all(torch.vstack((self.vehicleSpeed < max_speed, drive_at_max_speed)), dim=0)
+        decrease_speed = torch.all(torch.vstack((self.vehicleSpeed > max_speed, drive_at_max_speed)), dim=0)
+        self.vehicleSpeed[increase_speed] += self.cfg.maxAccel * self.cfg.dt
+        self.vehicleSpeed[decrease_speed] -= self.cfg.maxAccel * self.cfg.dt
+        increase_speed = torch.all(torch.vstack((self.vehicleSpeed <= 0, ~drive_at_max_speed)), dim=0)
+        decrease_speed = torch.all(torch.vstack((self.vehicleSpeed > 0, ~drive_at_max_speed)), dim=0)
+        self.vehicleSpeed[increase_speed] += self.cfg.maxAccel * self.cfg.dt
+        self.vehicleSpeed[decrease_speed] -= self.cfg.maxAccel * self.cfg.dt
+
+        # update twist command
+        self.twist[:, 0] = self.vehicleSpeed
+        self.twist[abs(self.vehicleSpeed) < self.cfg.maxAccel * self.cfg.dt, 0] = 0.0
+        self.twist[abs(self.vehicleSpeed) > self.cfg.maxSpeed, 0] = self.cfg.maxSpeed
+        self.twist[:, 2] = vehicleYawRate
+
+        return self.twist, self.current_waypoint_idxs
+
+    def _set_debug_vis(self, debug_vis: bool):
+        """Set the debug visualization for the command.
+
+        Args:
+            debug_vis (bool): Whether to enable debug visualization.
+        """
+        # create markers if necessary for the first time
+        # for each marker type check that the correct command properties exist eg. need spawn position for spawn marker
+        if debug_vis:
+            if not hasattr(self, "waypoint_visualizer"):
+                marker_cfg = CUBOID_MARKER_CFG.copy()
+                marker_cfg.prim_path = f"/Visuals/Command/position_waypoint"
+                marker_cfg.markers["cuboid"].size = (0.3, 0.3, 0.3)
+                # Change color of the marker
+                marker_cfg.markers["cuboid"].visual_material.diffuse_color = (1, 0.6, 0)
+                self.waypoint_visualizer = VisualizationMarkers(marker_cfg)
+                self.waypoint_visualizer.set_visibility(True)
+
+        else:
+            if hasattr(self, "waypoint_visualizer"):
+                self.waypoint_visualizer.set_visibility(False)
+
+    def _debug_vis_callback(self, event, paths: torch.Tensor):
+        """Callback function for the debug visualization."""
+
+        if not hasattr(self, "waypoint_visualizer"):
+            return
+
+        # Display markers at each path waypoint
+        self.waypoint_visualizer.visualize(paths)
