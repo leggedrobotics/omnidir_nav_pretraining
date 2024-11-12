@@ -56,6 +56,7 @@ def env_modifier_pre_init(env_cfg, args_cli):
         sub_terrains={
             "random_obstacle": MazeTerrainCfg(
                 size=size,
+                seed=42,
                 path_obstacles=terrain_json[0],
                 difficulty_configuration={
                     "0.0": 0.4,
