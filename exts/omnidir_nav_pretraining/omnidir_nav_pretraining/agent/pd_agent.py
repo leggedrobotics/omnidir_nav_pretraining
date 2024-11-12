@@ -100,7 +100,7 @@ class PDAgent(ABC):
         self.twist[env_ids] = 0.0
         self.goal_reached[env_ids] = False
 
-        self.current_waypoint_idxs = torch.zeros((self.num_envs), device=self.device)
+        self.current_waypoint_idxs[env_ids] = 0.0
         return {}
 
     def act(self, paths: torch.Tensor):
@@ -134,6 +134,8 @@ class PDAgent(ABC):
             tolerance = 0.5  # 50 cm
             # Compare paths_world and self.prev_paths within the tolerance
             new_paths = torch.any(torch.any(torch.abs(paths_world - self.prev_paths) > tolerance, dim=2), dim=1)
+            # if torch.any(new_paths):
+            #     print(f"New path detected for {torch.nonzero(new_paths)}")
             self.current_waypoint_idxs[new_paths] = 0
         self.prev_paths = paths_world
 

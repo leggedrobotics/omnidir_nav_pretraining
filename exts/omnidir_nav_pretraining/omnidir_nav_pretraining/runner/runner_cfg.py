@@ -14,10 +14,6 @@ from omnidir_nav_pretraining.agent import PDAgentCfg
 from omnidir_nav_pretraining.data_buffers import ReplayBufferCfg
 from omnidir_nav_pretraining.data_buffers import OmnidirNavDatasetCfg
 
-from omnidir_nav.mdp.commands import PretrainingGoalCommandCfg
-from nav_collectors.terrain_analysis.terrain_analysis_cfg import TerrainAnalysisCfg
-
-
 @configclass
 class GlobalSettingsCfg:
     command_timestep: float = MISSING
@@ -33,6 +29,7 @@ class OmnidirNavRunnerCfg:
     ############################################################
     # Model, Environment, Agent, Replay Buffer, Dataset Configs
     ############################################################
+
     # model_cfg: OmnidirNavModelCfg = MISSING
     """Model config class"""
     env_cfg: OmnidirNavEnvCfg = OmnidirNavEnvCfg()
@@ -52,33 +49,14 @@ class OmnidirNavRunnerCfg:
         non_obs_state_dim=1, # 1 additional state dimension for the current waypoint index
     )
     """Replay buffer config class"""
-    train_dataset_cfg: OmnidirNavDatasetCfg = OmnidirNavDatasetCfg()
-    """Training dataset config class"""
-    validation_dataset_cfg: OmnidirNavDatasetCfg = OmnidirNavDatasetCfg()
-    """Validation dataset config class"""
-
-    ############################################################
-    # Environment Settings
-    ############################################################
-
-    pretraining_goal_command_cfg: PretrainingGoalCommandCfg = PretrainingGoalCommandCfg(
-        asset_name="robot",
-        z_offset_spawn=0.1,
-        terrain_analysis=TerrainAnalysisCfg(
-            mode="path",
-            max_waypoints=10,
-            raycaster_sensor="front_zed_camera",
-            max_terrain_size=100.0,
-            sample_points=5000,  # TODO: Increase this after testing
-            height_diff_threshold=0.4,
-            semantic_cost_mapping=None,
-            viz_graph=False,
-            viz_height_map=False,
-            keep_paths_in_subterrain=True,
-        ),
-        resampling_time_range=(1.0e9, 1.0e9),  # No resampling
-        debug_vis=True,
+    train_dataset_cfg: OmnidirNavDatasetCfg = OmnidirNavDatasetCfg(
+        num_samples=100000,
     )
+    """Training dataset config class"""
+    validation_dataset_cfg: OmnidirNavDatasetCfg = OmnidirNavDatasetCfg(
+        num_samples=5000,
+    )
+    """Validation dataset config class"""
 
     ############################################################
     # Runner Settings

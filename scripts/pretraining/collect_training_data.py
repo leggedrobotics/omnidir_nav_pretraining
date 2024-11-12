@@ -16,6 +16,7 @@ parser = argparse.ArgumentParser(description="Collect Training Data in Testing e
 
 parser.add_argument("--num_envs", type=int, default=5, help="Number of environments to simulate.")
 parser.add_argument("--test_env", type=str, default="plane", help="Environment to collect data for.")
+parser.add_argument("--eval", action="store_true", default=False, help="Whether to create the eval or training dataset.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -48,12 +49,12 @@ def main():
     # init runner cfg
     cfg: OmnidirNavRunnerCfg = OmnidirNavRunnerCfg()
 
-    cfg = env_modifier_pre_init(cfg, args_cli=args_cli)
+    cfg.env_cfg = env_modifier_pre_init(cfg.env_cfg, args_cli=args_cli)
 
     # create a new stage
     omni.usd.get_context().new_stage()
     # init runner
-    runner = OmnidirNavRunner(cfg=cfg, args_cli=args_cli)
+    runner = OmnidirNavRunner(cfg=cfg, args_cli=args_cli, eval=args_cli.eval)
     # post modify runner and env
     runner = env_modifier_post_init(runner, args_cli=args_cli)
 
@@ -67,9 +68,12 @@ def main():
     timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
     dataset_path = os.path.join(DATA_DIR, timestamp)
     with open(dataset_path + ".pkl", "wb") as fp:
-        pickle.dump(runner.validation_dataset, fp)
+        data = {
+            "observations": runner.validation_dataset.obs,
+            "actions": runner.validation_dataset.actions,
+        }
+        pickle.dump(data, fp)
     print(f"[INFO] Data saved to {dataset_path}.pkl")
-    # Print the size of the save file
     print(f"[INFO] Size of the saved file: {os.path.getsize(dataset_path + '.pkl') / 1e6} MB")
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ class OmnidirNavRunner:
         self.cfg: OmnidirNavRunnerCfg = cfg
         self.args_cli = args_cli
         self.eval = eval
+        print(f"[INFO]: {'Eval' if eval else 'Training'} runner initialized.")
 
         # override the resampling command of the command generator with `trainer_cfg.command_timestep`
         self.cfg.env_cfg.episode_length_s = self.cfg.global_settings_cfg.command_timestep * (
@@ -128,7 +129,9 @@ class OmnidirNavRunner:
             ############################################################
             sim_start = time.time()
             with torch.inference_mode():
-                obs, _, dones, _, _ = self.env.step(actions.clone())
+                # We hack the terminated vs timeout signal by setting the timeout to True for goal_reached, so we can
+                # tell which environments have reached the goal and which haven't.
+                obs, _, dones_failed, dones_succeeded, _ = self.env.step(actions.clone())
             sim_time += time.time() - sim_start
 
             ############################################################
@@ -140,6 +143,7 @@ class OmnidirNavRunner:
             # obs_after_reset is observations recomputed after resetting environments that haven't touched the ground
             # successfully. If none are reset, obs_after_reset isn't computed to save time, and the original 
             # observations are used.
+            dones = dones_failed | dones_succeeded
             feet_all_contact, dones, obs_after_reset = self._feet_contact_handler(dones)
             obs = obs_after_reset if obs_after_reset is not None else obs
 
@@ -170,7 +174,8 @@ class OmnidirNavRunner:
                 states=states,
                 observations=obs[NAVIGATION_OBS].clone(),
                 actions=actions.clone(),
-                dones=dones.to(torch.bool).clone(),
+                dones_fail=dones_failed.to(torch.bool).clone(),
+                dones_success=dones_succeeded.to(torch.bool).clone(),
                 active_envs=feet_all_contact
             )
             process_time += time.time() - update_buffer_start
@@ -204,7 +209,7 @@ class OmnidirNavRunner:
             if (
                 not self.replay_buffer.is_filled
                 and self.replay_buffer.fill_ratio > 0.95
-                and plan_time + sim_time + process_time > 1.5 * np.mean(collect_time)
+                and plan_time + sim_time + process_time > 2.5 * np.mean(collect_time)
             ):
                 print("[WARNING]: Collection took too long for some environments. Stopping collection.")
                 self.replay_buffer.fill_leftover_envs()

@@ -92,11 +92,19 @@ class ReplayBuffer:
         states: torch.Tensor,
         observations: torch.Tensor,
         actions: torch.Tensor,
-        dones: torch.Tensor,
+        dones_fail: torch.Tensor,
+        dones_success: torch.Tensor,
         active_envs: torch.Tensor,
     ):
         # for terminate environments, reset the step counter
-        self.env_step_counter[dones] = 0
+        dones_fail = dones_fail.to(self.device)
+        dones_success = dones_success.to(self.device)
+        
+        self.env_step_counter[dones_success | dones_fail] = 0
+        self.last_good_fill_idx[dones_success] = self.fill_idx[dones_success]
+
+        # for failed environments, reset the buffer to the last good fill index
+        self.fill_idx[dones_fail] = self.last_good_fill_idx[dones_fail]
 
         # update full trajectory buffers
         self._update_buffers(actions, states, observations, active_envs)
@@ -178,6 +186,7 @@ class ReplayBuffer:
 
         # index buffers
         self.fill_idx = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.long)
+        self.last_good_fill_idx = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.long)
         self.env_step_counter = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.long)
 
     def _update_buffers(
