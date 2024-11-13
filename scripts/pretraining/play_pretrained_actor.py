@@ -19,8 +19,8 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--actor_critic_path", type=str, default=None, help="Where to load actor critic weights from.")
-parser.add_argument("--vit_path", type=str, default=None, help="Where to load vit weights from.")
 parser.add_argument("--test_env", type=str, default="normal", help="Override terrians with 'plane' for testing")
+parser.add_argument("--got", type=bool, default=False, help="Whether to use the GoT to process images.")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -54,11 +54,13 @@ from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
 
 from omnidir_nav_pretraining import env_modifier_pre_init
 from efficient_former.efficientformer_models import efficientformerv2_s1
+from got_nav.catkin_ws.src.gtrl.scripts.SAC.got_sac_network import GoTPolicy
 
 SPHERE_IMAGE_HEIGHT = 64
 SPHERE_IMAGE_SIDES = 6
 SPHERE_IMAGE_WIDTH = SPHERE_IMAGE_HEIGHT * 4
-IMAGE_START_IDX = 33
+IMAGE_START_IDX = 33 + 128
+NON_IMAGE_END_IDX = 33
 INPUT_IMAGE_SIZE = SPHERE_IMAGE_HEIGHT * 2
 
 
@@ -72,26 +74,20 @@ def extract_image_data(obs):
     # Order the images in the order of left, front, right, back
     reshaped_image_data = reshaped_image_data[:, [0, 3, 1, 2], :, :]
 
-    depth_channel = reshaped_image_data[..., 0:1].view(
-        image_data.shape[0], SPHERE_IMAGE_WIDTH, SPHERE_IMAGE_HEIGHT, 1
-    )
+    depth_channel = reshaped_image_data[..., 0:1].view(image_data.shape[0], SPHERE_IMAGE_WIDTH, SPHERE_IMAGE_HEIGHT, 1)
     semantics_channel = reshaped_image_data[..., 1:2].view(
         image_data.shape[0], SPHERE_IMAGE_WIDTH, SPHERE_IMAGE_HEIGHT, 1
     )
 
     # TODO(kappi): Use semantics once they aren't junk.
     image_data = torch.cat((depth_channel, depth_channel, depth_channel), dim=-1)
-    image_data = image_data.view(
-        image_data.shape[0], 2, int(SPHERE_IMAGE_WIDTH / 2), SPHERE_IMAGE_HEIGHT, 3
-    )
-    image_data = image_data.permute(0, 4, 2, 1, 3).reshape(
-        image_data.shape[0], 3, INPUT_IMAGE_SIZE, INPUT_IMAGE_SIZE
-    )
+    image_data = image_data.view(image_data.shape[0], 2, int(SPHERE_IMAGE_WIDTH / 2), SPHERE_IMAGE_HEIGHT, 3)
+    image_data = image_data.permute(0, 4, 2, 1, 3).reshape(image_data.shape[0], 3, INPUT_IMAGE_SIZE, INPUT_IMAGE_SIZE)
     # Rotate 90 degrees clockwise
     # TODO(kappi): Figure out if sphere image should be generated at 90 degrees.
     image_data = torch.rot90(image_data, k=-1, dims=(2, 3))
 
-    non_image_data = obs[:, :IMAGE_START_IDX]
+    non_image_data = obs[:, :NON_IMAGE_END_IDX]
 
     return image_data, non_image_data
 
@@ -102,11 +98,10 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
-    env_cfg = env_modifier_pre_init(env_cfg, args_cli)
+    # env_cfg = env_modifier_pre_init(env_cfg, args_cli)
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
 
     actor_critic_path = args_cli.actor_critic_path
-    vit_path = args_cli.vit_path
 
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -141,28 +136,15 @@ def main():
     # Load ActorCritic
     train_cfg = agent_cfg.to_dict()
     policy_cfg = train_cfg["policy"]
-    obs, _ = env.get_observations()
-
-    # TODO(kappi): Remove when sphere cam embeddings are set up right in env_cfg
-    # num_obs = obs.shape[1]
-    EMBEDDING_SIZE = 3584
-    NON_IMAGE_DATA_SIZE = 33
-    num_actor_obs = EMBEDDING_SIZE + NON_IMAGE_DATA_SIZE
-    num_critic_obs = num_actor_obs
-    actor_critic: ActorCritic = ActorCritic(
-        num_actor_obs, num_critic_obs, env.num_actions, **policy_cfg
-    ).to(args_cli.device)
-
-    # Load ViT
-    vit_model = efficientformerv2_s1(pretrained=False, resolution=128).to(args_cli.device)
+    actor_critic: ActorCritic = ActorCritic(env.num_obs, env.num_obs, env.num_actions, **policy_cfg).to(
+        args_cli.device
+    )
 
     print(f"[INFO]: Loading model checkpoint from: {actor_critic_path}")
-    # Load the saved state dictionaries
-    vit_model.load_state_dict(torch.load(vit_path))
+    # Load the saved state dictionary
     actor_critic.load_state_dict(torch.load(actor_critic_path))
 
     # Set models to evaluation mode
-    vit_model.eval()
     actor_critic.eval()
 
     # reset environment
@@ -172,12 +154,11 @@ def main():
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
-            image_data, non_image_data = extract_image_data(obs)
-            goal = non_image_data[:, -3:]
-            embeddings = vit_model.forward_omnidir(image_data, goal)
-            embeddings = embeddings[-1] if vit_model.fork_feat else embeddings
+            # TODO(kappi): Stupid training mistake, fix this
+            non_image_data = obs[:, :NON_IMAGE_END_IDX]
+            image_data = obs[:, NON_IMAGE_END_IDX:]
+            combined_input = torch.cat((image_data, non_image_data), dim=-1)
 
-            combined_input = torch.cat((embeddings, non_image_data), dim=-1)
             # agent stepping
             actions = actor_critic.actor(combined_input)
             # env stepping

@@ -53,10 +53,10 @@ def env_modifier_pre_init(env_cfg, args_cli):
         slope_threshold=0.75,
         difficulty_range=(0.0, 0.0),
         use_cache=False,
+        seed=42,
         sub_terrains={
             "random_obstacle": MazeTerrainCfg(
                 size=size,
-                seed=42,
                 path_obstacles=terrain_json[0],
                 difficulty_configuration={
                     "0.0": 0.4,
