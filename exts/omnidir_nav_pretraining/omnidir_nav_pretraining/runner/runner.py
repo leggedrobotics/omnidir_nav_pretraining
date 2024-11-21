@@ -25,11 +25,9 @@ NAVIGATION_OBS = "policy"
 
 
 class OmnidirNavRunner:
-    def __init__(self, cfg: OmnidirNavRunnerCfg, args_cli, eval: bool = False):
+    def __init__(self, cfg: OmnidirNavRunnerCfg, args_cli):
         self.cfg: OmnidirNavRunnerCfg = cfg
         self.args_cli = args_cli
-        self.eval = eval
-        print(f"[INFO]: {'Eval' if eval else 'Training'} runner initialized.")
 
         # override the resampling command of the command generator with `trainer_cfg.command_timestep`
         self.cfg.env_cfg.episode_length_s = self.cfg.global_settings_cfg.command_timestep * (
@@ -55,11 +53,8 @@ class OmnidirNavRunner:
     def setup(self):
         # setup environment
         self.env: ManagerBasedRLEnv = ManagerBasedRLEnv(self.cfg.env_cfg)
-        self.train_dataset = OmnidirNavDataset(
-            self.cfg.train_dataset_cfg, self.cfg.global_settings_cfg, self.cfg.replay_buffer_cfg, self.device
-        )
-        self.validation_dataset = OmnidirNavDataset(
-            self.cfg.validation_dataset_cfg, self.cfg.global_settings_cfg, self.cfg.replay_buffer_cfg, self.device
+        self.dataset = OmnidirNavDataset(
+            self.cfg.dataset_cfg, self.cfg.global_settings_cfg, self.cfg.replay_buffer_cfg, self.device
         )
         # setup replay buffer
         self.replay_buffer = ReplayBuffer(self.cfg.replay_buffer_cfg, self.cfg.global_settings_cfg, self.env)
@@ -68,7 +63,7 @@ class OmnidirNavRunner:
         # TODO(kappi): setup model and trainer
 
         # set up buffers to track first contact with the ground after reset.
-        self.feet_idx, _ = self.env.scene.sensors["contact_forces"].find_bodies(self.cfg.body_regex_contact_checking) # type: ignore
+        self.feet_idx, _ = self.env.scene.sensors["contact_forces"].find_bodies(self.cfg.body_regex_contact_checking)  # type: ignore
         self.feet_contact = torch.zeros(
             (self.env.num_envs, len(self.feet_idx)), dtype=torch.bool, device=self.env.device
         )
@@ -87,14 +82,14 @@ class OmnidirNavRunner:
     """
 
     @torch.inference_mode()
-    def collect(self, eval: bool = False):
+    def collect(self):
         """Collect data from the environment and store it."""
         print("[INFO]: Collecting data...")
         # reset environment
         with torch.inference_mode():
             obs, _ = self.env.reset(random.randint(0, 1000000))
             # the contact sensor is delayed, execute delay+1 steps to reset all environments correctly
-            if torch.any(obs[PRETRAINING_OBS][..., CONTACT_OBSERVATION_IDX]): # type: ignore
+            if torch.any(obs[PRETRAINING_OBS][..., CONTACT_OBSERVATION_IDX]):  # type: ignore
                 for _ in range(self.cfg.env_cfg.scene.contact_forces.history_length + 1):
                     obs, _, dones, _, _ = self.env.step(torch.zeros(self.env.num_envs, 3, device=self.env.device))
                 if dones.sum() != 0:
@@ -121,7 +116,7 @@ class OmnidirNavRunner:
         info_counter = 1
         step_counter = 0
 
-        num_waypoints = self.env.command_manager.get_term("goal_command").full_paths.shape[1] # type: ignore
+        num_waypoints = self.env.command_manager.get_term("goal_command").full_paths.shape[1]  # type: ignore
 
         while not self.replay_buffer.is_filled:
             ############################################################
@@ -138,10 +133,10 @@ class OmnidirNavRunner:
             # Determine feet contact
             ############################################################
             # Note: only start recording and changing actions when all feet have touched the ground
-            # dones here will include any environments that have been reset again after not successfully touching the 
+            # dones here will include any environments that have been reset again after not successfully touching the
             # ground after a reset.
             # obs_after_reset is observations recomputed after resetting environments that haven't touched the ground
-            # successfully. If none are reset, obs_after_reset isn't computed to save time, and the original 
+            # successfully. If none are reset, obs_after_reset isn't computed to save time, and the original
             # observations are used.
             dones = dones_failed | dones_succeeded
             feet_all_contact, dones, obs_after_reset = self._feet_contact_handler(dones)
@@ -155,7 +150,7 @@ class OmnidirNavRunner:
             plan_start = time.time()
 
             # get actions
-            paths = obs[PRETRAINING_OBS][:, -num_waypoints * 3 :].clone() # type: ignore
+            paths = obs[PRETRAINING_OBS][:, -num_waypoints * 3 :].clone()  # type: ignore
             paths = paths.view(paths.shape[0], num_waypoints, 3)
             actions, current_waypoint_idxs = self.agent.act(paths)
             # Don't move if all the feet haven't touched the ground yet
@@ -168,7 +163,7 @@ class OmnidirNavRunner:
             ###############################################################
 
             # Add the current waypoint indexes to the state
-            states = torch.cat((obs[PRETRAINING_OBS].clone(), current_waypoint_idxs.unsqueeze(1)), dim=-1) # type: ignore
+            states = torch.cat((obs[PRETRAINING_OBS].clone(), current_waypoint_idxs.unsqueeze(1)), dim=-1)  # type: ignore
             update_buffer_start = time.time()
             self.replay_buffer.add(
                 states=states,
@@ -176,7 +171,7 @@ class OmnidirNavRunner:
                 actions=actions.clone(),
                 dones_fail=dones_failed.to(torch.bool).clone(),
                 dones_success=dones_succeeded.to(torch.bool).clone(),
-                active_envs=feet_all_contact
+                active_envs=feet_all_contact,
             )
             process_time += time.time() - update_buffer_start
 
@@ -211,20 +206,17 @@ class OmnidirNavRunner:
                 and self.replay_buffer.fill_ratio > 0.95
                 and plan_time + sim_time + process_time > 2.5 * np.mean(collect_time)
             ):
-                print("[WARNING]: Collection took too long for some environments. Stopping collection.")
+                print(
+                    f"[WARNING]: Collection took too long for some environments ({torch.nonzero(self.replay_buffer.env_buffer_filled)}). Stopping collection."
+                )
                 self.replay_buffer.fill_leftover_envs()
                 break
 
         ############################################################
         # slice into samples and populate datasets
         ############################################################
-        print(f"[INFO]: Sampling from Replay Buffer to populate {'eval' if eval else 'training'} dataset.")
-        if eval:
-            self.validation_dataset.populate(replay_buffer=self.replay_buffer, num_waypoints=num_waypoints)
-
-        else:
-            self.train_dataset.populate(replay_buffer=self.replay_buffer, num_waypoints=num_waypoints)
-
+        print(f"[INFO]: Sampling from Replay Buffer to populate datasets.")
+        self.dataset.populate_and_save(replay_buffer=self.replay_buffer, num_waypoints=num_waypoints)
         print("[INFO]: Data collection complete.")
 
     @torch.inference_mode()
@@ -250,7 +242,7 @@ class OmnidirNavRunner:
             # NOTE: this does not affect the data collection, as it will only start when all feet are in contact
             with torch.inference_mode():
                 # TODO(kappi): uncomment when agent is available
-                #self.env._reset_idx(self.agent._ALL_INDICES[reset_envs])
+                # self.env._reset_idx(self.agent._ALL_INDICES[reset_envs])
                 # compute observations
                 # note: done after reset to get the correct observations for reset envs
                 obs_after_reset = self.env.observation_manager.compute()

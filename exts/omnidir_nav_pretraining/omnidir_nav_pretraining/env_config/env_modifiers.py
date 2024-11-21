@@ -24,61 +24,6 @@ def env_modifier_pre_init(env_cfg, args_cli):
     if args_cli.test_env == "plane":
         env_cfg.scene.terrain.terrain_type = "plane"
 
-    # env_cfg.scene.terrain = TerrainImporterCfg(
-    #     prim_path="/World/ground",
-    #     terrain_type="generator",
-    #     terrain_generator=terrains.DEMO_NAV_TERRAIN_CFG_PRETRAINING,
-    #     max_init_terrain_level=0,
-    #     collision_group=-1,
-    #     physics_material=sim_utils.RigidBodyMaterialCfg(
-    #         friction_combine_mode="multiply",
-    #         restitution_combine_mode="multiply",
-    #         static_friction=1.0,
-    #         dynamic_friction=1.0,
-    #     ),
-    #     debug_vis=True,
-    # )
-
-    terrain_json = (os.path.join(NAVSUITE_TASKS_DATA_DIR, "maze_terrain_json", "Training.json"),)
-    size = (30, 30)
-    MAZE_TERRAIN_EASY = TerrainGeneratorCfg(
-        curriculum=False,
-        size=size,
-        border_width=0.5,
-        border_height=2.0,
-        num_rows=1,
-        num_cols=1,
-        horizontal_scale=0.1,
-        vertical_scale=0.005,
-        slope_threshold=0.75,
-        difficulty_range=(0.0, 0.0),
-        use_cache=False,
-        seed=42,
-        sub_terrains={
-            "random_obstacle": MazeTerrainCfg(
-                size=size,
-                path_obstacles=terrain_json[0],
-                difficulty_configuration={
-                    "0.0": 0.4,
-                },
-            )
-        },
-    )
-    env_cfg.scene.terrain = TerrainImporterCfg(
-        prim_path="/World/ground",
-        terrain_type="generator",
-        terrain_generator=MAZE_TERRAIN_EASY,
-        max_init_terrain_level=0,
-        collision_group=-1,
-        physics_material=sim_utils.RigidBodyMaterialCfg(
-            friction_combine_mode="multiply",
-            restitution_combine_mode="multiply",
-            static_friction=1.0,
-            dynamic_friction=1.0,
-        ),
-        debug_vis=True,
-    )
-
     pretraining_goal_command_cfg: PretrainingGoalCommandCfg = PretrainingGoalCommandCfg(
         asset_name="robot",
         z_offset_spawn=0.1,
@@ -87,14 +32,15 @@ def env_modifier_pre_init(env_cfg, args_cli):
             max_path_length=15.0,
             raycaster_sensor="front_zed_camera",
             max_terrain_size=50.0,
-            sample_points=10000,  # TODO: Increase this after testing
+            sample_points=100000,  # TODO: Increase this after testing
             height_diff_threshold=0.4,
             semantic_cost_mapping=None,
-            viz_graph=True,
+            viz_graph=False,
             viz_height_map=False,
             keep_paths_in_subterrain=True,
+            num_paths=20000,
             # TODO(kappi): Do this better, don't save in terrain_analysis, wrap in the trajectory thing.
-            save_paths_filepath="omnidir_nav_pretraining/data/maze_paths.pt",
+            save_paths_filepath="omnidir_nav_pretraining/data/dense_maze_paths.pt",
         ),
         resampling_time_range=(1.0e9, 1.0e9),  # No resampling
         debug_vis=True,
@@ -123,6 +69,8 @@ def env_modifier_pre_init(env_cfg, args_cli):
             self.concatenate_terms = True
 
     env_cfg.observations.pretraining_state = PretrainingCfg()
+    # Get raw sphere image.
+    env_cfg.observations.policy.embedded_spherical_image.return_embedded = False
 
     @configclass
     class DebugViewerCfg(ViewerCfg):
@@ -138,7 +86,6 @@ def env_modifier_pre_init(env_cfg, args_cli):
     env_cfg.viewer = DebugViewerCfg()
 
     # This is a hack so we can tell apart the successful trajectories from the failed ones.
-    # TODO(kappi): Consider setting time_out to False for actual timeouts, so we only collect finished trajectories.
     env_cfg.terminations.goal_reached.time_out = True
     env_cfg.terminations.time_out.time_out = False
 

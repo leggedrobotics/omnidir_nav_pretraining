@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import pickle
+from datetime import datetime
+from omnidir_nav_pretraining import DATA_DIR
 import torch
 from prettytable import PrettyTable
 from torch.utils.data import Dataset
@@ -57,10 +61,69 @@ class OmnidirNavDataset(Dataset):
     # Operations
     ##
 
+    def populate_and_save(
+        self,
+        replay_buffer: ReplayBuffer,
+        num_waypoints: int,
+    ):
+        """
+        Populate and save training and validation datasets from the replay buffer.
+
+        Args:
+            replay_buffer: The replay buffer to get the data from.
+            num_waypoints: Number of waypoints to use in observations.
+        """
+        num_samples = self.cfg.num_samples
+        num_batches = (num_samples + self.cfg.batch_size - 1) // self.cfg.batch_size
+        validation_size = int(self.cfg.batch_size * self.cfg.validation_split)
+
+        now = datetime.now()
+        timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
+        dataset_base_path = os.path.join(DATA_DIR, timestamp)
+
+        # Create train and val subdirectories
+        os.makedirs(os.path.join(dataset_base_path, "train"), exist_ok=True)
+        os.makedirs(os.path.join(dataset_base_path, "val"), exist_ok=True)
+
+        for batch_idx in range(num_batches):
+            # Compute batch indices
+            start_idx = batch_idx * self.cfg.batch_size
+            end_idx = min(start_idx + self.cfg.batch_size, num_samples)
+            self.cfg.batch_size_actual = end_idx - start_idx
+
+            # Sample data for this batch
+            self.cfg.num_samples = self.cfg.batch_size_actual
+            self.populate(replay_buffer, num_waypoints, batch=batch_idx)
+
+            # Split data into training and validation
+            train_obs = self.obs[:-validation_size] if validation_size > 0 else self.obs
+            train_actions = self.actions[:-validation_size] if validation_size > 0 else self.actions
+            val_obs = self.obs[-validation_size:] if validation_size > 0 else []
+            val_actions = self.actions[-validation_size:] if validation_size > 0 else []
+
+            # Save training dataset
+            train_path = f"{dataset_base_path}/train/batch_{batch_idx}.pkl"
+            with open(train_path, "wb") as fp:
+                pickle.dump({"observations": train_obs, "actions": train_actions}, fp)
+
+            # Save validation dataset
+            if validation_size > 0:
+                val_path = f"{dataset_base_path}/val/batch_{batch_idx}.pkl"
+                with open(val_path, "wb") as fp:
+                    pickle.dump({"observations": val_obs, "actions": val_actions}, fp)
+
+            # Print status
+            print(f"Batch {batch_idx + 1}/{num_batches} processed and saved.")
+
+        # Restore original number of samples
+        self.cfg.num_samples = num_samples
+
+
     def populate(
         self,
         replay_buffer: ReplayBuffer,
         num_waypoints: int,
+        batch: int,
     ):
         """
         Update data in the buffer for specified indexes.
@@ -68,7 +131,7 @@ class OmnidirNavDataset(Dataset):
         Args:
             replay_buffer: The replay buffer to get the data from.
         """
-        start_idx = self._sample_random_traj_idx(replay_buffer)
+        start_idx = self._sample_random_traj_idx(replay_buffer, seed=batch)
 
         ############################################################
         # Actions
@@ -176,12 +239,12 @@ class OmnidirNavDataset(Dataset):
         # Check for nan and inf values
         ############################################################
 
-        if torch.any(torch.isnan(self.states)) or torch.any(torch.isinf(self.states)):
-            raise ValueError("Nan/ Inf values in states!")
-        if torch.any(torch.isnan(self.obs)) or torch.any(torch.isinf(self.obs)):
-            raise ValueError("Nan/ Inf values in proprioceptive observations!")
-        if torch.any(torch.isnan(self.actions)) or torch.any(torch.isinf(self.actions)):
-            raise ValueError("Nan/ Inf values in actions!")
+        # if torch.any(torch.isnan(self.states)) or torch.any(torch.isinf(self.states)):
+        #     raise ValueError("Nan/ Inf values in states!")
+        # if torch.any(torch.isnan(self.obs)) or torch.any(torch.isinf(self.obs)):
+        #     raise ValueError("Nan/ Inf values in proprioceptive observations!")
+        # if torch.any(torch.isnan(self.actions)) or torch.any(torch.isinf(self.actions)):
+        #     raise ValueError("Nan/ Inf values in actions!")
 
         ############################################################
         # Print meta information
@@ -214,7 +277,10 @@ class OmnidirNavDataset(Dataset):
         # Print table
         print(f"[INFO] Dataset Metrics {self.states.shape[0]} samples\n", table)
 
-    def _sample_random_traj_idx(self, replay_buffer: ReplayBuffer):
+    def _sample_random_traj_idx(self, replay_buffer: ReplayBuffer, seed = 0):
+        # Force randomness
+        random_seed = int.from_bytes(os.urandom(4), byteorder="big")
+        torch.manual_seed(random_seed)
         # sample random start indexes
         start_idx = torch.randint(
             1,

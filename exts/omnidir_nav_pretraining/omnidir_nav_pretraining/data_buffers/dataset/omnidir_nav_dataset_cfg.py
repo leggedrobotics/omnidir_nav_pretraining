@@ -11,3 +11,5 @@ from omni.isaac.lab.utils import configclass
 class OmnidirNavDatasetCfg:
     num_samples: int = 1000
     min_traj_duration_steps: int = 2
+    batch_size: int = 1000
+    validation_split: float = 0.1

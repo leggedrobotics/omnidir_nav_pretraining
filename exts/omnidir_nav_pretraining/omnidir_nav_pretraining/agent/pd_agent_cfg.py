@@ -27,7 +27,7 @@ class PDAgentCfg:
 
     lookAheadDistance: float = 1.0
     """The lookahead distance for the path follower."""
-    two_way_drive: bool = False
+    two_way_drive: bool = True
     """Allow robot to use reverse gear."""
     switch_time_threshold: float = 1.0
     """Time threshold to switch between the forward and backward drive."""
@@ -44,7 +44,7 @@ class PDAgentCfg:
     dt: float = 0.1
     """Time step path follower 10Hz"""
 
-    waypointUpdateThre: float = 0.3
+    waypointUpdateThre: float = 0.5
 
     maxYawRate: float = 90.0 * math.pi / 360
     dirDiffThre: float = 0.7

@@ -20,7 +20,6 @@ parser.add_argument("--num_envs", type=int, default=None, help="Number of enviro
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--actor_critic_path", type=str, default=None, help="Where to load actor critic weights from.")
 parser.add_argument("--test_env", type=str, default="normal", help="Override terrians with 'plane' for testing")
-parser.add_argument("--got", type=bool, default=False, help="Whether to use the GoT to process images.")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -53,44 +52,6 @@ from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
 )
 
 from omnidir_nav_pretraining import env_modifier_pre_init
-from efficient_former.efficientformer_models import efficientformerv2_s1
-from got_nav.catkin_ws.src.gtrl.scripts.SAC.got_sac_network import GoTPolicy
-
-SPHERE_IMAGE_HEIGHT = 64
-SPHERE_IMAGE_SIDES = 6
-SPHERE_IMAGE_WIDTH = SPHERE_IMAGE_HEIGHT * 4
-IMAGE_START_IDX = 33 + 128
-NON_IMAGE_END_IDX = 33
-INPUT_IMAGE_SIZE = SPHERE_IMAGE_HEIGHT * 2
-
-
-def extract_image_data(obs):
-    image_data = obs[:, IMAGE_START_IDX:]
-    reshaped_image_data = image_data.view(
-        image_data.shape[0], SPHERE_IMAGE_SIDES, SPHERE_IMAGE_HEIGHT, SPHERE_IMAGE_HEIGHT, 2
-    )
-    # utils.visualize_cube_sphere(reshaped_image_data[0])
-    reshaped_image_data = reshaped_image_data[:, :4, :, :, :]
-    # Order the images in the order of left, front, right, back
-    reshaped_image_data = reshaped_image_data[:, [0, 3, 1, 2], :, :]
-
-    depth_channel = reshaped_image_data[..., 0:1].view(image_data.shape[0], SPHERE_IMAGE_WIDTH, SPHERE_IMAGE_HEIGHT, 1)
-    semantics_channel = reshaped_image_data[..., 1:2].view(
-        image_data.shape[0], SPHERE_IMAGE_WIDTH, SPHERE_IMAGE_HEIGHT, 1
-    )
-
-    # TODO(kappi): Use semantics once they aren't junk.
-    image_data = torch.cat((depth_channel, depth_channel, depth_channel), dim=-1)
-    image_data = image_data.view(image_data.shape[0], 2, int(SPHERE_IMAGE_WIDTH / 2), SPHERE_IMAGE_HEIGHT, 3)
-    image_data = image_data.permute(0, 4, 2, 1, 3).reshape(image_data.shape[0], 3, INPUT_IMAGE_SIZE, INPUT_IMAGE_SIZE)
-    # Rotate 90 degrees clockwise
-    # TODO(kappi): Figure out if sphere image should be generated at 90 degrees.
-    image_data = torch.rot90(image_data, k=-1, dims=(2, 3))
-
-    non_image_data = obs[:, :NON_IMAGE_END_IDX]
-
-    return image_data, non_image_data
-
 
 def main():
     """Play with RSL-RL agent."""
@@ -98,7 +59,9 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
-    # env_cfg = env_modifier_pre_init(env_cfg, args_cli)
+    env_cfg = env_modifier_pre_init(env_cfg, args_cli)
+    env_cfg.observations.pretraining_state = None
+    env_cfg.observations.policy.embedded_spherical_image.return_embedded = True
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
 
     actor_critic_path = args_cli.actor_critic_path
@@ -154,13 +117,8 @@ def main():
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
-            # TODO(kappi): Stupid training mistake, fix this
-            non_image_data = obs[:, :NON_IMAGE_END_IDX]
-            image_data = obs[:, NON_IMAGE_END_IDX:]
-            combined_input = torch.cat((image_data, non_image_data), dim=-1)
-
             # agent stepping
-            actions = actor_critic.actor(combined_input)
+            actions = actor_critic.actor(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
         if args_cli.video:

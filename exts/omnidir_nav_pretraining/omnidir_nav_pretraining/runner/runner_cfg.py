@@ -45,18 +45,16 @@ class OmnidirNavRunnerCfg:
     )
     """Agent config class"""
     replay_buffer_cfg: ReplayBufferCfg = ReplayBufferCfg(
-        trajectory_length=100,
+        trajectory_length=30,
         non_obs_state_dim=1, # 1 additional state dimension for the current waypoint index
     )
     """Replay buffer config class"""
-    train_dataset_cfg: OmnidirNavDatasetCfg = OmnidirNavDatasetCfg(
+    dataset_cfg: OmnidirNavDatasetCfg = OmnidirNavDatasetCfg(
         num_samples=100000,
+        validation_split=0.1,
+        batch_size=1000,
     )
-    """Training dataset config class"""
-    validation_dataset_cfg: OmnidirNavDatasetCfg = OmnidirNavDatasetCfg(
-        num_samples=5000,
-    )
-    """Validation dataset config class"""
+    """Dataset config class"""
 
     ############################################################
     # Runner Settings
