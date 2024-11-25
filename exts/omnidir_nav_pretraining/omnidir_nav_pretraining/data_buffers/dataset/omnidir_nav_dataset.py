@@ -79,7 +79,7 @@ class OmnidirNavDataset(Dataset):
 
         now = datetime.now()
         timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
-        dataset_base_path = os.path.join(DATA_DIR, timestamp)
+        dataset_base_path = os.path.join(DATA_DIR, f"data_collection_output/{timestamp}")
 
         # Create train and val subdirectories
         os.makedirs(os.path.join(dataset_base_path, "train"), exist_ok=True)

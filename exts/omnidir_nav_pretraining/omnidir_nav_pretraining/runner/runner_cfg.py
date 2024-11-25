@@ -45,7 +45,7 @@ class OmnidirNavRunnerCfg:
     )
     """Agent config class"""
     replay_buffer_cfg: ReplayBufferCfg = ReplayBufferCfg(
-        trajectory_length=30,
+        trajectory_length=300,
         non_obs_state_dim=1, # 1 additional state dimension for the current waypoint index
     )
     """Replay buffer config class"""

@@ -24,23 +24,25 @@ def env_modifier_pre_init(env_cfg, args_cli):
     if args_cli.test_env == "plane":
         env_cfg.scene.terrain.terrain_type = "plane"
 
+    env_cfg.scene.terrain.terrain_generator=terrains.MAZE_TERRAIN_EASY
+
     pretraining_goal_command_cfg: PretrainingGoalCommandCfg = PretrainingGoalCommandCfg(
         asset_name="robot",
         z_offset_spawn=0.1,
         terrain_analysis=TerrainAnalysisCfg(
             mode="path",
-            max_path_length=15.0,
+            max_path_length=20.0,
             raycaster_sensor="front_zed_camera",
             max_terrain_size=50.0,
             sample_points=100000,  # TODO: Increase this after testing
             height_diff_threshold=0.4,
             semantic_cost_mapping=None,
-            viz_graph=False,
+            viz_graph=True,
             viz_height_map=False,
             keep_paths_in_subterrain=True,
             num_paths=20000,
             # TODO(kappi): Do this better, don't save in terrain_analysis, wrap in the trajectory thing.
-            save_paths_filepath="omnidir_nav_pretraining/data/dense_maze_paths.pt",
+            save_paths_filepath="omnidir_nav_pretraining/exts/omnidir_nav_pretraining/terrain_analysis/colliding_paths.pt",
         ),
         resampling_time_range=(1.0e9, 1.0e9),  # No resampling
         debug_vis=True,
@@ -83,7 +85,7 @@ def env_modifier_pre_init(env_cfg, args_cli):
         env_index: int = 1
         asset_name: str = "robot"
 
-    env_cfg.viewer = DebugViewerCfg()
+    # env_cfg.viewer = DebugViewerCfg()
 
     # This is a hack so we can tell apart the successful trajectories from the failed ones.
     env_cfg.terminations.goal_reached.time_out = True
