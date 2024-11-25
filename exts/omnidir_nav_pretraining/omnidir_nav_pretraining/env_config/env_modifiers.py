@@ -85,7 +85,7 @@ def env_modifier_pre_init(env_cfg, args_cli):
         env_index: int = 1
         asset_name: str = "robot"
 
-    # env_cfg.viewer = DebugViewerCfg()
+    env_cfg.viewer = DebugViewerCfg()
 
     # This is a hack so we can tell apart the successful trajectories from the failed ones.
     env_cfg.terminations.goal_reached.time_out = True
