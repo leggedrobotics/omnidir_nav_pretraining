@@ -24,7 +24,7 @@ def env_modifier_pre_init(env_cfg, args_cli):
     if args_cli.test_env == "plane":
         env_cfg.scene.terrain.terrain_type = "plane"
 
-    env_cfg.scene.terrain.terrain_generator=terrains.MAZE_TERRAIN_EASY
+    env_cfg.scene.terrain.terrain_generator=terrains.MAZE_TERRAIN_HARD
 
     pretraining_goal_command_cfg: PretrainingGoalCommandCfg = PretrainingGoalCommandCfg(
         asset_name="robot",
@@ -42,7 +42,7 @@ def env_modifier_pre_init(env_cfg, args_cli):
             keep_paths_in_subterrain=True,
             num_paths=20000,
             # TODO(kappi): Do this better, don't save in terrain_analysis, wrap in the trajectory thing.
-            save_paths_filepath="omnidir_nav_pretraining/exts/omnidir_nav_pretraining/data/terrain_analysis/colliding_paths.pt",
+            save_paths_filepath="omnidir_nav_pretraining/exts/omnidir_nav_pretraining/data/terrain_analysis/colliding_paths_training.pt",
         ),
         resampling_time_range=(1.0e9, 1.0e9),  # No resampling
         debug_vis=True,
