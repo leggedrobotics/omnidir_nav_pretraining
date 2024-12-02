@@ -24,25 +24,26 @@ def env_modifier_pre_init(env_cfg, args_cli):
     if args_cli.test_env == "plane":
         env_cfg.scene.terrain.terrain_type = "plane"
 
-    env_cfg.scene.terrain.terrain_generator=terrains.MAZE_TERRAIN_HARD
+    env_cfg.scene.terrain.terrain_generator=terrains.STRIP_MAZE
 
-    pretraining_goal_command_cfg: PretrainingGoalCommandCfg = PretrainingGoalCommandCfg(
+    pretraining_goal_command_cfg: PretrainingGoalCommandCfg = mdp.PretrainingGoalCommandCfg(
         asset_name="robot",
         z_offset_spawn=0.1,
         terrain_analysis=TerrainAnalysisCfg(
             mode="path",
-            max_path_length=20.0,
+            path_type="crossing",
+            max_path_length=17.0,
             raycaster_sensor="front_zed_camera",
-            max_terrain_size=50.0,
+            max_terrain_size=120.0,
             sample_points=100000,  # TODO: Increase this after testing
             height_diff_threshold=0.4,
             semantic_cost_mapping=None,
             viz_graph=True,
             viz_height_map=False,
             keep_paths_in_subterrain=True,
-            num_paths=20000,
+            num_paths=10000,
             # TODO(kappi): Do this better, don't save in terrain_analysis, wrap in the trajectory thing.
-            save_paths_filepath="omnidir_nav_pretraining/exts/omnidir_nav_pretraining/data/terrain_analysis/colliding_paths_training.pt",
+            save_paths_filepath="omnidir_nav_pretraining/exts/omnidir_nav_pretraining/data/terrain_analysis/crossing_paths.pt",
         ),
         resampling_time_range=(1.0e9, 1.0e9),  # No resampling
         debug_vis=True,

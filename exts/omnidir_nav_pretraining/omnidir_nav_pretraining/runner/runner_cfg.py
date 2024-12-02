@@ -50,7 +50,7 @@ class OmnidirNavRunnerCfg:
     )
     """Replay buffer config class"""
     dataset_cfg: OmnidirNavDatasetCfg = OmnidirNavDatasetCfg(
-        num_samples=100000,
+        num_samples=75000,
         validation_split=0.1,
         batch_size=1000,
     )
