@@ -89,28 +89,29 @@ class OmnidirNavDataset(Dataset):
             # Compute batch indices
             start_idx = batch_idx * self.cfg.batch_size
             end_idx = min(start_idx + self.cfg.batch_size, num_samples)
-            self.cfg.batch_size_actual = end_idx - start_idx
 
             # Sample data for this batch
-            self.cfg.num_samples = self.cfg.batch_size_actual
+            self.cfg.num_samples = end_idx - start_idx
             self.populate(replay_buffer, num_waypoints, batch=batch_idx)
 
             # Split data into training and validation
             train_obs = self.obs[:-validation_size] if validation_size > 0 else self.obs
+            train_prev_obs = self.prev_obs[:-validation_size] if validation_size > 0 else self.prev_obs
             train_actions = self.actions[:-validation_size] if validation_size > 0 else self.actions
             val_obs = self.obs[-validation_size:] if validation_size > 0 else []
+            val_prev_obs = self.prev_obs[-validation_size:] if validation_size > 0 else []
             val_actions = self.actions[-validation_size:] if validation_size > 0 else []
 
             # Save training dataset
             train_path = f"{dataset_base_path}/train/batch_{batch_idx}.pkl"
             with open(train_path, "wb") as fp:
-                pickle.dump({"observations": train_obs, "actions": train_actions}, fp)
+                pickle.dump({"observations": train_obs, "actions": train_actions, "prev_observations": train_prev_obs}, fp)
 
             # Save validation dataset
             if validation_size > 0:
                 val_path = f"{dataset_base_path}/val/batch_{batch_idx}.pkl"
                 with open(val_path, "wb") as fp:
-                    pickle.dump({"observations": val_obs, "actions": val_actions}, fp)
+                    pickle.dump({"observations": val_obs, "actions": val_actions, "prev_observations": val_prev_obs}, fp)
 
             # Print status
             print(f"Batch {batch_idx + 1}/{num_batches} processed and saved.")
@@ -145,12 +146,14 @@ class OmnidirNavDataset(Dataset):
         # TODO(kappi): get current state and use it to transform the previous and following states into the local robot
         # frame shape: [N, 7] with [x, y, z, qx, qy, qz, qw]
         self.states = replay_buffer.states[start_idx[:, 0], start_idx[:, 1]]
+        self.prev_states = replay_buffer.states[start_idx[:, 0], start_idx[:, 1] - 1]
 
         ############################################################
         # Observations
         ############################################################
 
         self.obs = replay_buffer.observations[start_idx[:, 0], start_idx[:, 1]]
+        self.prev_obs = replay_buffer.observations[start_idx[:, 0], start_idx[:, 1] - 1]
 
         ############################################################
         # Goals
@@ -190,6 +193,10 @@ class OmnidirNavDataset(Dataset):
             dtype=torch.bool,
             device=self.replay_buffer_cfg.buffer_device,
         )
+
+        # Filter out any sampleswhere the previous state is from a past goal.
+        prev_waypoint_idx = self.prev_states[:,-1].to(torch.int)
+        keep_idx &= prev_waypoint_idx <= curr_waypoint_idx
 
         # TODO(kappi): Implement filtering of bad trajectories (collisions, falling off the plane etc.) by setting keep_idx to False
 
@@ -279,11 +286,10 @@ class OmnidirNavDataset(Dataset):
 
     def _sample_random_traj_idx(self, replay_buffer: ReplayBuffer, seed = 0):
         # Force randomness
-        random_seed = int.from_bytes(os.urandom(4), byteorder="big")
-        torch.manual_seed(random_seed)
+        torch.manual_seed(seed)
         # sample random start indexes
         start_idx = torch.randint(
-            1,
+            2,
             self.replay_buffer_cfg.trajectory_length - self.cfg.min_traj_duration_steps - 1,
             (self.cfg.num_samples,),
             device=self.replay_buffer_cfg.buffer_device,
@@ -300,6 +306,7 @@ class OmnidirNavDataset(Dataset):
         """Filter data and only keep the given indexes. After filtering, update the number of samples"""
         # filter data
         self.obs = self.obs[keep_idx]
+        self.prev_obs = self.prev_obs[keep_idx]
         self.actions = self.actions[keep_idx]
         self.states = self.states[keep_idx]
 

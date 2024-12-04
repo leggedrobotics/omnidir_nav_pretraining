@@ -12,3 +12,5 @@ DATA_DIR = os.path.join(EXT_DIR, "data")
 from .data_buffers import *
 from .env_config import *
 from .runner import *
+
+from .efficient_former import *

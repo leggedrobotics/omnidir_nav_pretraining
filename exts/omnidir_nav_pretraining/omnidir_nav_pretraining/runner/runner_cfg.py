@@ -23,7 +23,7 @@ class GlobalSettingsCfg:
 @configclass
 class OmnidirNavRunnerCfg:
     global_settings_cfg: GlobalSettingsCfg = GlobalSettingsCfg(
-        command_timestep=2.0,
+        command_timestep=1.0,
     )
 
     ############################################################

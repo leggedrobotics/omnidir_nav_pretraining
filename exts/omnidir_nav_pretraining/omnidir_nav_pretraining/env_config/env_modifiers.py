@@ -24,7 +24,7 @@ def env_modifier_pre_init(env_cfg, args_cli):
     if args_cli.test_env == "plane":
         env_cfg.scene.terrain.terrain_type = "plane"
 
-    env_cfg.scene.terrain.terrain_generator=terrains.STRIP_MAZE
+    env_cfg.scene.terrain.terrain_generator=terrains.MAZE_TERRAIN_EASY
 
     pretraining_goal_command_cfg: PretrainingGoalCommandCfg = mdp.PretrainingGoalCommandCfg(
         asset_name="robot",
@@ -32,7 +32,7 @@ def env_modifier_pre_init(env_cfg, args_cli):
         terrain_analysis=TerrainAnalysisCfg(
             mode="path",
             path_type="crossing",
-            max_path_length=17.0,
+            max_path_length=10.0,
             raycaster_sensor="front_zed_camera",
             max_terrain_size=120.0,
             sample_points=100000,  # TODO: Increase this after testing
@@ -41,9 +41,9 @@ def env_modifier_pre_init(env_cfg, args_cli):
             viz_graph=True,
             viz_height_map=False,
             keep_paths_in_subterrain=True,
-            num_paths=10000,
+            num_paths=1000,
             # TODO(kappi): Do this better, don't save in terrain_analysis, wrap in the trajectory thing.
-            save_paths_filepath="omnidir_nav_pretraining/exts/omnidir_nav_pretraining/data/terrain_analysis/crossing_paths.pt",
+            save_paths_filepath="omnidir_nav_pretraining/exts/omnidir_nav_pretraining/data/terrain_analysis/random_paths.pt",
         ),
         resampling_time_range=(1.0e9, 1.0e9),  # No resampling
         debug_vis=True,

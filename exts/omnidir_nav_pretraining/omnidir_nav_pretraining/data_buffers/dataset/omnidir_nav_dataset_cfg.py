@@ -13,3 +13,4 @@ class OmnidirNavDatasetCfg:
     min_traj_duration_steps: int = 2
     batch_size: int = 1000
     validation_split: float = 0.1
+    max_dist_between_states: float = 2.0
