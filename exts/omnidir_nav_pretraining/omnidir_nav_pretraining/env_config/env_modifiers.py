@@ -79,14 +79,14 @@ def env_modifier_pre_init(env_cfg, args_cli):
     class DebugViewerCfg(ViewerCfg):
         """Configuration of the scene viewport camera."""
 
-        eye: tuple[float, float, float] = (0.0, 7.0, 7.0)
+        eye: tuple[float, float, float] = (0.0, 1.0, 7.0)
         lookat: tuple[float, float, float] = (0.0, 0.0, 0.0)
         resolution: tuple[int, int] = (1280, 720)  # (1280, 720) HD, (1920, 1080) FHD
         origin_type: str = "asset_root"  # "world", "env", "asset_root"
         env_index: int = 1
         asset_name: str = "robot"
 
-    env_cfg.viewer = DebugViewerCfg()
+    # env_cfg.viewer = DebugViewerCfg()
 
     # This is a hack so we can tell apart the successful trajectories from the failed ones.
     env_cfg.terminations.goal_reached.time_out = True

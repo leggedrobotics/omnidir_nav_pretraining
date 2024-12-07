@@ -87,12 +87,12 @@ def extract_image_data(obs):
 
     ##### MISTAKE!!! REMOVE IF NOT USING THE 12-03 DATA ####
     # Normalize the image data between 0 and 1
-    image_data[image_data > 40.0] = 40.0
-    image_data = image_data / 40.0
+    # image_data[image_data > 40.0] = 40.0
+    # image_data = image_data / 40.0
 
-    # Step 4: Overwrite values of 0.0 with -1.0
-    # TODO(kappi): Remove when the data is collected again.
-    image_data[image_data == 0.0] = -1.0
+    # # Step 4: Overwrite values of 0.0 with -1.0
+    # # TODO(kappi): Remove when the data is collected again.
+    # image_data[image_data == 0.0] = -1.0
     ##### MISTAKE!!! REMOVE IF NOT USING THE 12-03 DATA ####
 
     # Add a third channel

@@ -98,20 +98,23 @@ class OmnidirNavDataset(Dataset):
             train_obs = self.obs[:-validation_size] if validation_size > 0 else self.obs
             train_prev_obs = self.prev_obs[:-validation_size] if validation_size > 0 else self.prev_obs
             train_actions = self.actions[:-validation_size] if validation_size > 0 else self.actions
+            train_waypoints = self.paths[:-validation_size] if validation_size > 0 else self.paths
+
             val_obs = self.obs[-validation_size:] if validation_size > 0 else []
             val_prev_obs = self.prev_obs[-validation_size:] if validation_size > 0 else []
             val_actions = self.actions[-validation_size:] if validation_size > 0 else []
+            val_waypoints = self.paths[-validation_size:] if validation_size > 0 else []
 
             # Save training dataset
             train_path = f"{dataset_base_path}/train/batch_{batch_idx}.pkl"
             with open(train_path, "wb") as fp:
-                pickle.dump({"observations": train_obs, "actions": train_actions, "prev_observations": train_prev_obs}, fp)
+                pickle.dump({"observations": train_obs, "actions": train_actions, "prev_observations": train_prev_obs, "waypoints": train_waypoints}, fp)
 
             # Save validation dataset
             if validation_size > 0:
                 val_path = f"{dataset_base_path}/val/batch_{batch_idx}.pkl"
                 with open(val_path, "wb") as fp:
-                    pickle.dump({"observations": val_obs, "actions": val_actions, "prev_observations": val_prev_obs}, fp)
+                    pickle.dump({"observations": val_obs, "actions": val_actions, "prev_observations": val_prev_obs, "waypoints": val_waypoints}, fp)
 
             # Print status
             print(f"Batch {batch_idx + 1}/{num_batches} processed and saved.")
@@ -162,13 +165,13 @@ class OmnidirNavDataset(Dataset):
         # The last entry in the state is the current waypoint index
         curr_waypoint_idx = replay_buffer.states[start_idx[:, 0], start_idx[:, 1], -1].to(torch.int)
         # Extract the whole path of waypoints
-        paths = replay_buffer.states[start_idx[:, 0], start_idx[:, 1], -num_waypoints * 3 -1 :-1]
-        paths = paths.view(paths.shape[0], num_waypoints, 3)
+        self.paths = replay_buffer.states[start_idx[:, 0], start_idx[:, 1], -num_waypoints * 3 -1 :-1]
+        self.paths = self.paths.view(self.paths.shape[0], num_waypoints, 3)
 
         # All waypoints can act as goals, except those from the past (before the current waypoint)
         # So for waypoints in the past, overwrite them with the last (goal) waypoint
         # Get the shape parameters
-        num_envs, num_waypoints, _ = paths.shape
+        num_envs, num_waypoints, _ = self.paths.shape
 
         # Calculate the range limits for each environment
         # num_waypoints - waypoint_idx gives the range size for each environment
@@ -178,10 +181,10 @@ class OmnidirNavDataset(Dataset):
         random_offsets = self._tensor_randint(0, range_size, (num_envs,)).to(torch.int)
 
         # Add the random offsets to waypoint_idx to get a random waypoint in the specified range
-        random_valid_goals = paths[torch.arange(paths.shape[0]), curr_waypoint_idx + random_offsets]
+        random_valid_goals = self.paths[torch.arange(self.paths.shape[0]), curr_waypoint_idx + random_offsets]
 
         # Overwrite the observed goals with the random valid goals
-        self.obs[:, GOAL_IDX_START:GOAL_IDX_END] = random_valid_goals
+        # self.obs[:, GOAL_IDX_START:GOAL_IDX_END] = random_valid_goals
 
         ############################################################
         # Filter data
