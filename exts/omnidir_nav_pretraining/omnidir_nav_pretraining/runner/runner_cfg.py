@@ -35,11 +35,10 @@ class OmnidirNavRunnerCfg:
     env_cfg: OmnidirNavEnvCfg = OmnidirNavEnvCfg()
     """Environment config class"""
     agent_cfg: PDAgentCfg = PDAgentCfg(
-        min_points_within_lookahead=2,
         path_frame="robot",
         maxAccel=2.5,
         maxSpeed=0.75,
-        waypointUpdateThre=0.3,
+        waypointUpdateThre=0.6,
         dynamic_lookahead=True,
         debug_vis=True,
     )

@@ -24,7 +24,7 @@ def env_modifier_pre_init(env_cfg, args_cli):
     if args_cli.test_env == "plane":
         env_cfg.scene.terrain.terrain_type = "plane"
 
-    env_cfg.scene.terrain.terrain_generator=terrains.MAZE_TERRAIN_EASY
+    env_cfg.scene.terrain.terrain_generator=terrains.STRIP_MAZE
 
     pretraining_goal_command_cfg: PretrainingGoalCommandCfg = mdp.PretrainingGoalCommandCfg(
         asset_name="robot",
@@ -43,7 +43,7 @@ def env_modifier_pre_init(env_cfg, args_cli):
             keep_paths_in_subterrain=True,
             num_paths=1000,
             # TODO(kappi): Do this better, don't save in terrain_analysis, wrap in the trajectory thing.
-            save_paths_filepath="omnidir_nav_pretraining/exts/omnidir_nav_pretraining/data/terrain_analysis/random_paths.pt",
+            save_paths_filepath="omnidir_nav_pretraining/exts/omnidir_nav_pretraining/data/terrain_analysis/crossing_paths.pt",
         ),
         resampling_time_range=(1.0e9, 1.0e9),  # No resampling
         debug_vis=True,
@@ -79,14 +79,14 @@ def env_modifier_pre_init(env_cfg, args_cli):
     class DebugViewerCfg(ViewerCfg):
         """Configuration of the scene viewport camera."""
 
-        eye: tuple[float, float, float] = (0.0, 1.0, 7.0)
+        eye: tuple[float, float, float] = (0.0, 4.0, 7.0)
         lookat: tuple[float, float, float] = (0.0, 0.0, 0.0)
         resolution: tuple[int, int] = (1280, 720)  # (1280, 720) HD, (1920, 1080) FHD
         origin_type: str = "asset_root"  # "world", "env", "asset_root"
         env_index: int = 1
         asset_name: str = "robot"
 
-    # env_cfg.viewer = DebugViewerCfg()
+    env_cfg.viewer = DebugViewerCfg()
 
     # This is a hack so we can tell apart the successful trajectories from the failed ones.
     env_cfg.terminations.goal_reached.time_out = True

@@ -312,6 +312,7 @@ class OmnidirNavDataset(Dataset):
         self.prev_obs = self.prev_obs[keep_idx]
         self.actions = self.actions[keep_idx]
         self.states = self.states[keep_idx]
+        self.paths = self.paths[keep_idx]
 
         # update sample number
         self._actual_num_samples = torch.sum(keep_idx).item()
