@@ -7,7 +7,7 @@ import argparse
 from omni.isaac.lab.app import AppLauncher
 
 # local imports
-import cli_args  # isort: skip
+import cli_args
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Play an RL agent with RSL-RL.")
@@ -43,6 +43,9 @@ import torch
 
 from rsl_rl.modules import ActorCritic
 
+from omni.isaac.lab.envs.common import ViewerCfg
+from omni.isaac.lab.utils import configclass  # isort: skip
+
 from omni.isaac.lab.envs import DirectMARLEnv, multi_agent_to_single_agent
 from omni.isaac.lab.utils.dict import print_dict
 from omni.isaac.lab_tasks.utils import parse_env_cfg
@@ -59,9 +62,21 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
-    env_cfg = env_modifier_pre_init(env_cfg, args_cli)
-    env_cfg.observations.pretraining_state = None
-    env_cfg.observations.policy.embedded_spherical_image.return_embedded = True
+    # env_cfg = env_modifier_pre_init(env_cfg, args_cli)
+
+    @configclass
+    class DebugViewerCfg(ViewerCfg):
+        """Configuration of the scene viewport camera."""
+
+        eye: tuple[float, float, float] = (0.0, 2.0, 7.0)
+        lookat: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        resolution: tuple[int, int] = (1280, 720)  # (1280, 720) HD, (1920, 1080) FHD
+        origin_type: str = "asset_root"  # "world", "env", "asset_root"
+        env_index: int = 1
+        asset_name: str = "robot"
+
+    env_cfg.viewer = DebugViewerCfg()
+
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
 
     actor_critic_path = args_cli.actor_critic_path

@@ -29,7 +29,7 @@ class PDAgentCfg:
     """The lookahead distance for the path follower."""
     two_way_drive: bool = True
     """Allow robot to use reverse gear."""
-    switch_time_threshold: float = 1.0
+    switch_time_threshold: float = 0.5
     """Time threshold to switch between the forward and backward drive."""
     maxSpeed: float = 2.5#0.5
     """Maximum speed of the robot."""
